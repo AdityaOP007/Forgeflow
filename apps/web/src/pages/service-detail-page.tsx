@@ -43,7 +43,7 @@ import { Skeleton } from '../components/ui/skeleton';
 
 export function ServiceDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { token, user, role } = useAppAuth();
+  const { user, role } = useAppAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -55,9 +55,9 @@ export function ServiceDetailPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['service', id, token],
-    queryFn: () => fetchServiceById(token || '', id || ''),
-    enabled: Boolean(token && id),
+    queryKey: ['service', id],
+    queryFn: () => fetchServiceById(id || ''),
+    enabled: Boolean(id),
   });
 
   // Check edit & delete authorization
@@ -82,7 +82,7 @@ export function ServiceDetailPage() {
   // Edit mutation
   const editMutation = useMutation({
     mutationFn: (data: UpdateServiceInput) =>
-      updateService(token || '', id || '', {
+      updateService(id || '', {
         ...data,
         repositoryUrl: data.repositoryUrl === '' ? null : data.repositoryUrl,
       }),
@@ -95,7 +95,7 @@ export function ServiceDetailPage() {
 
   // Delete mutation
   const deleteMutation = useMutation({
-    mutationFn: () => deleteService(token || '', id || ''),
+    mutationFn: () => deleteService(id || ''),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardSummary'] });

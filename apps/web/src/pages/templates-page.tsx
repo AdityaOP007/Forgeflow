@@ -17,7 +17,7 @@ import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
 
 export function TemplatesPage() {
-  const { token, role } = useAppAuth();
+  const { role } = useAppAuth();
   const navigate = useNavigate();
 
   const {
@@ -25,9 +25,8 @@ export function TemplatesPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['templates', token],
-    queryFn: () => fetchTemplates(token || ''),
-    enabled: Boolean(token),
+    queryKey: ['templates'],
+    queryFn: () => fetchTemplates(),
   });
 
   return (

@@ -27,36 +27,59 @@ export class ApiError extends Error {
 
 export async function apiRequest<T>(
   path: string,
-  options: RequestInit & { token?: string | null } = {}
+  options: RequestInit & { retries?: number } = {}
 ): Promise<T> {
-  const { token, headers, ...rest } = options;
+  const { headers, retries = 3, ...rest } = options;
   const url = `${API_BASE_URL}${path}`;
 
-  const res = await fetch(url, {
-    ...rest,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
-  });
-
-  if (!res.ok) {
-    let errBody: { error?: { message?: string; code?: string } } | null = null;
+  let attempt = 0;
+  while (true) {
     try {
-      errBody = await res.json();
-    } catch {
-      // not json
+      const res = await fetch(url, {
+        ...rest,
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+      });
+
+      if (!res.ok) {
+        let errBody: { error?: { message?: string; code?: string } } | null = null;
+        try {
+          errBody = await res.json();
+        } catch {
+          // not json
+        }
+        const message = errBody?.error?.message || `Request failed with status ${res.status}`;
+
+        // Retry 502/503/504 gateway/service errors during server startup
+        if (res.status >= 502 && res.status <= 504 && attempt < retries) {
+          attempt++;
+          await new Promise((r) => setTimeout(r, Math.min(1000 * attempt, 3000)));
+          continue;
+        }
+
+        throw new ApiError(res.status, message, errBody);
+      }
+
+      if (res.status === 204) {
+        return null as T;
+      }
+
+      return res.json();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        throw err;
+      }
+      // Network error (e.g. server starting up, connection refused)
+      if (attempt < retries) {
+        attempt++;
+        await new Promise((r) => setTimeout(r, Math.min(1000 * attempt, 3000)));
+        continue;
+      }
+      throw err;
     }
-    const message = errBody?.error?.message || `Request failed with status ${res.status}`;
-    throw new ApiError(res.status, message, errBody);
   }
-
-  if (res.status === 204) {
-    return null as T;
-  }
-
-  return res.json();
 }
 
 // ─── Typed API endpoints ─────────────────────────────────────────────
@@ -65,16 +88,15 @@ export async function fetchHealth(): Promise<HealthResponse> {
   return apiRequest<HealthResponse>('/health');
 }
 
-export async function fetchMe(token: string): Promise<UserProfile> {
-  return apiRequest<UserProfile>('/api/me', { token });
+export async function fetchMe(): Promise<UserProfile> {
+  return apiRequest<UserProfile>('/api/me');
 }
 
-export async function fetchDashboardSummary(token: string): Promise<DashboardSummary> {
-  return apiRequest<DashboardSummary>('/api/dashboard/summary', { token });
+export async function fetchDashboardSummary(): Promise<DashboardSummary> {
+  return apiRequest<DashboardSummary>('/api/dashboard/summary');
 }
 
 export async function fetchServices(
-  token: string,
   query?: Partial<ListServicesQuery>
 ): Promise<PaginatedResponse<ServiceListItem>> {
   const params = new URLSearchParams();
@@ -87,45 +109,33 @@ export async function fetchServices(
   if (query?.order) params.set('order', query.order);
 
   const qs = params.toString();
-  return apiRequest<PaginatedResponse<ServiceListItem>>(`/api/services${qs ? `?${qs}` : ''}`, {
-    token,
-  });
+  return apiRequest<PaginatedResponse<ServiceListItem>>(`/api/services${qs ? `?${qs}` : ''}`);
 }
 
-export async function fetchServiceById(token: string, id: string): Promise<ServiceDetail> {
-  return apiRequest<ServiceDetail>(`/api/services/${id}`, { token });
+export async function fetchServiceById(id: string): Promise<ServiceDetail> {
+  return apiRequest<ServiceDetail>(`/api/services/${id}`);
 }
 
-export async function createService(
-  token: string,
-  input: CreateServiceInput
-): Promise<ServiceDetail> {
+export async function createService(input: CreateServiceInput): Promise<ServiceDetail> {
   return apiRequest<ServiceDetail>('/api/services', {
     method: 'POST',
-    token,
     body: JSON.stringify(input),
   });
 }
 
-export async function updateService(
-  token: string,
-  id: string,
-  input: UpdateServiceInput
-): Promise<ServiceDetail> {
+export async function updateService(id: string, input: UpdateServiceInput): Promise<ServiceDetail> {
   return apiRequest<ServiceDetail>(`/api/services/${id}`, {
     method: 'PATCH',
-    token,
     body: JSON.stringify(input),
   });
 }
 
-export async function deleteService(token: string, id: string): Promise<void> {
+export async function deleteService(id: string): Promise<void> {
   return apiRequest<void>(`/api/services/${id}`, {
     method: 'DELETE',
-    token,
   });
 }
 
-export async function fetchTemplates(token: string): Promise<TemplateItem[]> {
-  return apiRequest<TemplateItem[]>('/api/templates', { token });
+export async function fetchTemplates(): Promise<TemplateItem[]> {
+  return apiRequest<TemplateItem[]>('/api/templates');
 }

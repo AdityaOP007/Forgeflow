@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { loadEnv } from './config/env.js';
 import { healthRouter } from './routes/health.js';
 import { meRouter } from './modules/me/routes.js';
 import { templatesRouter } from './modules/templates/routes.js';
@@ -16,6 +17,7 @@ export interface AppOptions {
 }
 
 export function createApp({ auth, webOrigin }: AppOptions) {
+  loadEnv();
   const app = express();
 
   // Security hardening

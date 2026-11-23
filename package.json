@@ -4,7 +4,8 @@
   "private": true,
   "packageManager": "pnpm@12.21.0",
   "scripts": {
-    "dev": "pnpm --filter @forgeflow/api --filter @forgeflow/web --parallel dev",
+    "predev": "node scripts/predev.mjs",
+    "dev": "pnpm db:migrate && pnpm db:seed && pnpm --filter @forgeflow/api --filter @forgeflow/web --parallel dev",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "lint": "eslint . && prettier --check .",

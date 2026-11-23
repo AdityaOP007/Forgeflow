@@ -4,7 +4,9 @@ ForgeFlow is an Internal Developer Platform (IDP) web portal that empowers engin
 
 ## Current Status
 
-> **Phase 1 (Foundation and Service Catalog)**: Complete foundation featuring PostgreSQL persistence with Drizzle ORM, Clerk authentication, server-side RBAC (`admin`, `developer`, `viewer`), service catalog CRUD, architecture templates, dashboard overview, and end-to-end API testing.
+> **Phase 1 (Foundation and Service Catalog)**: Complete foundation featuring PostgreSQL persistence with Drizzle ORM, local admin mode with server-side RBAC (`admin`, `developer`, `viewer`), service catalog CRUD, architecture templates, dashboard overview, and comprehensive API testing.
+>
+> **Note on Authentication**: The platform currently runs in **local development mode** as a single built-in local admin user (`admin@forgeflow.local`, role: `admin`), bypassing sign-in requirements. Full Clerk authentication has been safely preserved in git tag `phase-1-clerk` and will be reintroduced in a later phase alongside an enterprise SSO provider option.
 
 ---
 
@@ -17,13 +19,66 @@ ForgeFlow is an Internal Developer Platform (IDP) web portal that empowers engin
 
 ---
 
+## Quick Start & Running Locally
+
+Get the complete ForgeFlow platform running with a single command:
+
+### 1. Clone the Repository
+
+```bash
+git clone <repository-url>
+cd Forgeflow
+```
+
+### 2. Copy Environment Files
+
+```bash
+# Root monorepo environment
+cp .env.example .env
+
+# API service environment
+cp apps/api/.env.example apps/api/.env
+
+# Web client environment
+cp apps/web/.env.example apps/web/.env
+```
+
+### 3. Install Dependencies
+
+```bash
+pnpm install
+```
+
+### 4. Start Development (`pnpm dev`)
+
+```bash
+pnpm dev
+```
+
+`pnpm dev` automatically performs all required setup steps in order:
+
+1. **Predev Step**: Verifies Docker is running and starts PostgreSQL (`docker compose up -d --wait postgres`).
+2. **Migrations & Seed**: Runs schema migrations (`pnpm db:migrate`) and seeds reference service templates (`pnpm db:seed`).
+3. **Application Servers**: Starts the backend API (`http://127.0.0.1:4000`) and Vite web portal (`http://localhost:5173`) in parallel.
+4. **Browser Launch**: Automatically opens your browser directly to `/dashboard`.
+
+> **Note on Individual Scripts**:
+> You can still run individual lifecycle commands as needed:
+>
+> - `pnpm db:migrate` — Run pending database migrations
+> - `pnpm db:seed` — Idempotently seed reference templates
+> - `pnpm --filter @forgeflow/api dev` — Run API server only
+> - `pnpm --filter @forgeflow/web dev` — Run Web portal only
+
+---
+
 ## Monorepo Architecture
 
 ```text
 forgeflow/
 |-- apps/
-|   |-- web/                 # React 18 + Vite + Tailwind CSS + Clerk React
-|   `-- api/                 # Express + TypeScript + Drizzle ORM + Clerk Express
+|   |-- web/                 # React 18 + Vite + Tailwind CSS + TanStack Query
+|   `-- api/                 # Express + TypeScript + Drizzle ORM + Local Auth
 |-- packages/
 |   |-- shared-types/        # Shared Zod validation schemas & TypeScript contracts
 |   `-- ui/                  # Reusable UI component library (Phase 1+)
@@ -49,101 +104,23 @@ forgeflow/
 
 ---
 
-## Phase 1 Setup & Getting Started
+## Local Development Mode & Role Testing
 
-### 1. Clerk Authentication Setup
+In local development mode:
 
-1. Create a free account and application at [Clerk](https://clerk.com).
-2. Enable **Email / Password** or **Google** authentication in your Clerk dashboard.
-3. Ensure **Email Verification** is required so primary email addresses have `status: "verified"`.
-4. Copy your **Publishable Key** (`pk_test_...`) and **Secret Key** (`sk_test_...`).
+- The application runs as a single built-in local admin user (`name: "Local Admin"`, `email: "admin@forgeflow.local"`, `role: "admin"`).
+- Incoming `Authorization` headers are ignored.
+- The API explicitly binds to `127.0.0.1` and fails immediately if `NODE_ENV === 'production'`.
+- The database schema retains the `clerk_id` column (`users.clerk_id = 'local-admin'`) as an external identity placeholder for future enterprise auth integrations.
+- There is **no client-side role switcher** in the UI. If a developer wants to test `viewer` or `developer` permissions, they can change the role in the database directly:
 
-### 2. Environment Configuration
+```sql
+-- Switch local user to viewer
+UPDATE users SET role = 'viewer' WHERE clerk_id = 'local-admin';
 
-Copy the example environment files:
-
-```bash
-# Root monorepo environment
-cp .env.example .env
-
-# API service environment
-cp apps/api/.env.example apps/api/.env
-
-# Web client environment
-cp apps/web/.env.example apps/web/.env
+-- Restore local user to admin
+UPDATE users SET role = 'admin' WHERE clerk_id = 'local-admin';
 ```
-
-Configure your keys in the `.env` files:
-
-- **`apps/api/.env`**:
-  ```env
-  PORT=4000
-  NODE_ENV=development
-  WEB_ORIGIN=http://localhost:5173
-  DATABASE_URL=postgresql://forgeflow:forgeflow_password@localhost:5432/forgeflow
-  TEST_DATABASE_URL=postgresql://forgeflow:forgeflow_password@localhost:5432/forgeflow_test
-  CLERK_SECRET_KEY=sk_test_your_clerk_secret_key
-  CLERK_PUBLISHABLE_KEY=pk_test_your_clerk_publishable_key
-  ADMIN_EMAILS=your-admin-email@example.com
-  ```
-- **`apps/web/.env`**:
-  ```env
-  VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_clerk_publishable_key
-  ```
-
-### 3. Start Local Infrastructure
-
-Start the PostgreSQL service using Docker Compose:
-
-```bash
-docker compose up -d
-```
-
-This provisions the `forgeflow-postgres` container on port `5432` with both the `forgeflow` (development) and `forgeflow_test` (test) databases.
-
-### 4. Database Migrations & Seeding
-
-Run Drizzle migrations to create the 6 platform tables:
-
-```bash
-pnpm db:migrate
-```
-
-Seed the platform with starter templates:
-
-```bash
-pnpm db:seed
-```
-
-> **Note on Database Reset**:
-> `pnpm db:reset` drops and recreates public schema tables, runs migrations, and applies seeds. It includes a strict safety guard that refuses to execute when `NODE_ENV=production`.
-
-### 5. Start Development Servers
-
-Run both the API backend and React frontend concurrently:
-
-```bash
-pnpm dev
-```
-
-- **Frontend Portal**: [http://localhost:5173](http://localhost:5173)
-- **Backend API**: [http://localhost:4000](http://localhost:4000)
-- **Health Check**: [http://localhost:4000/health](http://localhost:4000/health)
-- **Database Readiness**: [http://localhost:4000/health/ready](http://localhost:4000/health/ready)
-
----
-
-## Identity & Role Model (`clerk_id`)
-
-ForgeFlow uses Clerk for identity and token issuance, paired with internal Just-In-Time (JIT) provisioning:
-
-- Every record in the `users` table contains a unique `clerk_id` referencing the Clerk user identifier (e.g., `user_2...`).
-- When an authenticated request arrives at the API, the `clerkAuthVerifier` validates the bearer token via `@clerk/express`, fetches the user profile using `clerkClient.users.getUser(userId)`, and synchronizes the user via `syncClerkUser`.
-- The user's primary email address is checked:
-  - If the email is verified and present in `ADMIN_EMAILS`, the user is granted the `admin` role.
-  - Otherwise, new accounts receive the `viewer` role.
-  - Existing `developer` or `admin` roles are preserved (no automatic demotion).
-- All platform resources (services, audit logs) link to the internal UUID `users.id`, ensuring database integrity while remaining decoupled from external auth providers.
 
 ---
 
@@ -154,7 +131,6 @@ Run the full verification suite across all workspaces:
 ```bash
 # Code quality and formatting checks
 pnpm lint
-pnpm format:check
 
 # Strict TypeScript type-checking across all workspaces
 pnpm typecheck

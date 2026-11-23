@@ -1,6 +1,5 @@
 import React from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { UserButton } from '@clerk/clerk-react';
 import {
   LayoutDashboard,
   Layers,
@@ -24,14 +23,16 @@ export function AppShell() {
   // Generate breadcrumb items from path
   const pathSegments = location.pathname.split('/').filter(Boolean);
   const breadcrumbs = [
-    { label: 'ForgeFlow', path: '/' },
-    ...pathSegments.map((segment, index) => {
-      const path = '/' + pathSegments.slice(0, index + 1).join('/');
-      let label = segment.charAt(0).toUpperCase() + segment.slice(1);
-      if (segment === 'services') label = 'Catalog';
-      if (segment === 'new') label = 'New Service';
-      return { label, path };
-    }),
+    { label: 'ForgeFlow', path: '/dashboard' },
+    ...pathSegments
+      .filter((segment) => segment !== 'dashboard')
+      .map((segment, index) => {
+        const path = '/' + pathSegments.slice(0, index + 1).join('/');
+        let label = segment.charAt(0).toUpperCase() + segment.slice(1);
+        if (segment === 'services') label = 'Catalog';
+        if (segment === 'new') label = 'New Service';
+        return { label, path };
+      }),
   ];
 
   const navLinkClasses = ({ isActive }: { isActive: boolean }) =>
@@ -67,9 +68,9 @@ export function AppShell() {
             <div className="text-[10px] uppercase font-semibold text-slate-500 px-3 py-1 tracking-wider">
               Platform
             </div>
-            <NavLink to="/" end className={navLinkClasses}>
+            <NavLink to="/dashboard" className={navLinkClasses}>
               <LayoutDashboard className="h-4 w-4" />
-              <span>Dashboard</span>
+              <span>Overview</span>
             </NavLink>
 
             <NavLink to="/services" className={navLinkClasses}>
@@ -108,78 +109,80 @@ export function AppShell() {
           </nav>
         </div>
 
-        {/* Sidebar Footer with real user info & Clerk UserButton */}
+        {/* Sidebar Footer with plain text local user info */}
         <div className="p-4 border-t border-slate-800/80">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3 min-w-0">
-              <UserButton
-                afterSignOutUrl="/"
-                appearance={{
-                  elements: {
-                    userButtonAvatarBox: 'h-8 w-8 border border-slate-700',
-                  },
-                }}
-              />
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-slate-200 truncate">
-                  {user?.name || user?.email || 'User'}
-                </p>
-                <Badge
-                  variant={
-                    role === 'admin' ? 'admin' : role === 'developer' ? 'developer' : 'viewer'
-                  }
-                  className="text-[10px] py-0 px-1.5"
-                >
-                  {role || 'viewer'}
-                </Badge>
-              </div>
+            <div className="min-w-0">
+              <span className="text-sm font-medium text-slate-200 block truncate">
+                {user?.name || 'Local Admin'}
+              </span>
+              <span className="text-xs text-slate-500 block truncate">
+                {user?.email || 'admin@forgeflow.local'}
+              </span>
             </div>
+            <Badge
+              variant="outline"
+              className="capitalize text-[10px] ml-2 shrink-0 border-indigo-500 text-indigo-400 bg-indigo-950/30"
+            >
+              {role}
+            </Badge>
           </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Header */}
-        <header className="h-16 border-b border-slate-800 bg-slate-900/40 px-8 flex items-center justify-between shrink-0">
-          {/* Breadcrumbs */}
-          <nav
-            aria-label="Breadcrumb"
-            className="flex items-center space-x-1.5 text-sm text-slate-400"
-          >
-            {breadcrumbs.map((crumb, idx) => {
-              const isLast = idx === breadcrumbs.length - 1;
-              return (
-                <React.Fragment key={crumb.path}>
-                  {idx > 0 && <ChevronRight className="h-3.5 w-3.5 text-slate-600" />}
-                  {isLast ? (
-                    <span className="font-semibold text-slate-100">{crumb.label}</span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => navigate(crumb.path)}
-                      className="hover:text-slate-200 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 rounded px-1"
-                    >
-                      {crumb.label}
-                    </button>
-                  )}
-                </React.Fragment>
-              );
-            })}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Top Header / Breadcrumbs & Topbar User Display */}
+        <header
+          aria-label="Top Navigation Bar"
+          className="h-16 border-b border-slate-800 bg-slate-900/40 px-6 flex items-center justify-between shrink-0"
+        >
+          {/* Breadcrumb Trail */}
+          <nav aria-label="Breadcrumbs" className="flex items-center space-x-2 text-sm">
+            {breadcrumbs.map((crumb, idx) => (
+              <React.Fragment key={`${crumb.path}-${idx}`}>
+                {idx > 0 && <ChevronRight className="h-3.5 w-3.5 text-slate-600" />}
+                {idx === breadcrumbs.length - 1 ? (
+                  <span className="font-semibold text-slate-100">{crumb.label}</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => navigate(crumb.path)}
+                    className="text-slate-400 hover:text-slate-200 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 rounded px-1"
+                  >
+                    {crumb.label}
+                  </button>
+                )}
+              </React.Fragment>
+            ))}
           </nav>
 
-          {/* Quick Action */}
-          <div className="flex items-center space-x-3">
-            {role !== 'viewer' && location.pathname !== '/services/new' && (
-              <Button size="sm" onClick={() => navigate('/services/new')}>
+          {/* Topbar: User Info as plain text and action buttons */}
+          <div className="flex items-center space-x-4">
+            <div className="text-right">
+              <span className="text-sm font-medium text-slate-200 block">
+                {user?.name || 'Local Admin'}
+              </span>
+              <span className="text-xs text-indigo-400 font-mono capitalize block">{role}</span>
+            </div>
+
+            {role !== 'viewer' && (
+              <Button
+                size="sm"
+                onClick={() => navigate('/services/new')}
+                className="focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
                 Create Service
               </Button>
             )}
           </div>
         </header>
 
-        {/* Page Content */}
-        <main className="flex-1 p-8 overflow-y-auto focus-visible:outline-none">
+        {/* Page Content Viewport */}
+        <main
+          aria-label="Main Page Content"
+          className="flex-1 overflow-y-auto p-8 focus-visible:outline-none"
+        >
           <Outlet />
         </main>
       </div>

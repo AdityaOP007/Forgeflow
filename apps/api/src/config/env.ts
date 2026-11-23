@@ -5,22 +5,16 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   DATABASE_URL: z.string().url(),
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
-  CLERK_SECRET_KEY: z.string().min(1),
-  CLERK_PUBLISHABLE_KEY: z.string().min(1),
-  ADMIN_EMAILS: z
-    .string()
-    .default('')
-    .transform((v) =>
-      v
-        .split(',')
-        .map((e) => e.trim())
-        .filter(Boolean)
-    ),
+  LOCAL_USER_EMAIL: z.string().email().default('admin@forgeflow.local'),
 });
 
 export type Env = z.infer<typeof envSchema>;
 
 let _env: Env | null = null;
+
+export function resetEnv(): void {
+  _env = null;
+}
 
 export function loadEnv(): Env {
   if (_env) return _env;
@@ -30,6 +24,12 @@ export function loadEnv(): Env {
     console.error(result.error.format());
     process.exit(1);
   }
+
+  // Hard safety guard: local auth mode must never run in production
+  if (result.data.NODE_ENV === 'production') {
+    throw new Error('Local auth cannot be used in production');
+  }
+
   _env = result.data;
   return _env;
 }

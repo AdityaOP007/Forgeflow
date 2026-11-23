@@ -16,7 +16,6 @@
     "db:reset": "tsx src/db/reset.ts"
   },
   "dependencies": {
-    "@clerk/express": "^2.1.96",
     "@forgeflow/shared-types": "workspace:*",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

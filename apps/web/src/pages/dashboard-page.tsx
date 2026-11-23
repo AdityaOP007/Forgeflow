@@ -18,7 +18,7 @@ import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
 
 export function DashboardPage() {
-  const { token, user, role } = useAppAuth();
+  const { user, role } = useAppAuth();
   const navigate = useNavigate();
 
   const {
@@ -27,9 +27,8 @@ export function DashboardPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['dashboardSummary', token],
-    queryFn: () => fetchDashboardSummary(token || ''),
-    enabled: Boolean(token),
+    queryKey: ['dashboardSummary'],
+    queryFn: () => fetchDashboardSummary(),
   });
 
   if (isLoading) {

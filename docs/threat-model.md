@@ -7,7 +7,7 @@ This document outlines the threat model, security posture, and defensive control
 ## 1. Protected Assets
 
 - **Database & State**: Relational catalog records, user accounts, deployment environments, and workflow executions.
-- **User Identity & Access**: Session tokens, user roles (`admin`, `developer`, `viewer`), and authorization state.
+- **User Identity & Access**: User roles (`admin`, `developer`, `viewer`) and authorization state.
 - **Service Configuration & Infrastructure**: Repository URLs, template definitions, and environment endpoints.
 - **Audit Trails**: Non-repudiation records in `audit_logs` tracking service creation, modification, and deletion.
 
@@ -15,14 +15,15 @@ This document outlines the threat model, security posture, and defensive control
 
 ## 2. Threat Analysis & Mitigations
 
-### A. Authentication & Identity Spoofing
+### A. Authentication & Local Development Mode
 
-| Threat                                     | Risk     | Mitigation                                                                                                                                                                                                                       |
-| :----------------------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unauthenticated access to API endpoints    | High     | Strict `clerkAuthVerifier` rejects requests missing or carrying invalid tokens with `401 Unauthorized`.                                                                                                                          |
-| Unverified email claiming admin privileges | Critical | `syncClerkUser` fetches user profile directly from Clerk API (`clerkClient.users.getUser`) and checks that the primary email has `verification.status === 'verified'`. Unverified email addresses are never granted admin roles. |
-| Email collision / account hijacking        | High     | The `users` table enforces a unique constraint on `email`. `provisionUser` checks existing email associations and returns a `409 Conflict` if an email is already claimed by a different `clerk_id`.                             |
-| Concurrent provisioning race condition     | Medium   | User provisioning uses an atomic PostgreSQL `INSERT ... ON CONFLICT (clerk_id) DO UPDATE` query, eliminating select-then-insert race conditions.                                                                                 |
+| Threat                                      | Risk     | Mitigation                                                                                                                                                                                                        |
+| :------------------------------------------ | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accidental deployment of local auth to prod | Critical | Hard safety rule in `apps/api/src/config/env.ts`: if `NODE_ENV === 'production'`, startup throws a fatal error: `"Local auth cannot be used in production"`.                                                      |
+| Network exposure of unauthenticated API     | High     | The Express server explicitly binds to `127.0.0.1` (loopback only) rather than `0.0.0.0`. CORS is strictly restricted to `WEB_ORIGIN` (default `http://localhost:5173`).                                          |
+| Header injection / token confusion          | Medium   | The local auth verifier ignores any incoming `Authorization` headers entirely, resolving only to the local administrator row.                                                                                     |
+| Concurrent startup user provisioning race   | Medium   | User provisioning uses an atomic PostgreSQL `INSERT ... ON CONFLICT (clerk_id) DO UPDATE` query with in-memory caching and single-flight deduplication, eliminating select-then-insert race conditions.           |
+| External Identity Decoupling                | Low      | The `clerk_id` column is maintained as an external-auth identity placeholder. Full Clerk auth is preserved in git tag `phase-1-clerk` and will be reintroduced later alongside an enterprise SSO provider option. |
 
 ### B. Authorization & Privilege Escalation
 
@@ -30,7 +31,7 @@ This document outlines the threat model, security posture, and defensive control
 | :------------------------------------------------ | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Unauthorized modification or deletion of services | Critical | Server-side authorization enforced in API service layer. `requireRole(['admin', 'developer'])` guards write endpoints; developers can only edit or delete services where `service.owner_id === req.auth.userId`. Admins can manage all services. Viewers are strictly read-only. |
 | UI bypass (manipulating frontend client)          | High     | UI role checks are cosmetic only. Every mutating API route independently verifies identity, role, and ownership server-side.                                                                                                                                                     |
-| Accidental admin demotion or privilege race       | Medium   | The `provisionUser` query employs a strict **No-Demotion Policy**: `role` is updated to `admin` when verified matching `ADMIN_EMAILS`, but is never automatically downgraded to `viewer` on repeat logins. Demotions require an explicit administrative action.                  |
+| Client-side role tampering                        | Medium   | The frontend derives all role permissions directly from the `/api/me` response. No client-side role switcher, dev buttons, or localStorage overrides exist.                                                                                                                      |
 
 ### C. Input Validation & Injection Attacks
 
@@ -49,8 +50,8 @@ This document outlines the threat model, security posture, and defensive control
 
 ### E. Operational & Infrastructure Security
 
-| Threat                               | Risk     | Mitigation                                                                                                                                                                                             |
-| :----------------------------------- | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Accidental production database wipe  | Critical | The `db:reset` script contains a production guard refusing execution if `NODE_ENV=production`. Additionally, test cleanup routines throw an error if the connected database does not end with `_test`. |
-| Hardcoded secrets in version control | Critical | Credentials and API keys are managed exclusively via `.env` files (enforced by `.gitignore`). Example templates (`.env.example`) contain only parameter names and non-sensitive placeholder values.    |
-| Network and CORS exposure            | Medium   | CORS is restricted to `WEB_ORIGIN` (`http://localhost:5173` in development).                                                                                                                           |
+| Threat                             | Risk     | Mitigation                                                                                                                                                                            |
+| :--------------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Accidental test cleanup on prod DB | Critical | The test suite cleanup helper `cleanTables()` queries `SELECT current_database()` and throws a fatal error unless the connected database name ends with `_test`.                      |
+| HTTP header vulnerabilities        | Medium   | `helmet` middleware configures standard secure HTTP response headers (HSTS, X-Content-Type-Options, etc.).                                                                            |
+| Denial of Service (DoS) on API     | Medium   | Express `express-rate-limit` enforces 100 requests per minute on `/api` routes with standard HTTP 429 response codes, and `express.json({ limit: '100kb' })` caps body payload sizes. |

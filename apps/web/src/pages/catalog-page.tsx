@@ -21,7 +21,7 @@ import { Skeleton } from '../components/ui/skeleton';
 import type { EnvironmentStatus } from '@forgeflow/shared-types';
 
 export function CatalogPage() {
-  const { token, role } = useAppAuth();
+  const { role } = useAppAuth();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
@@ -34,9 +34,9 @@ export function CatalogPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['services', token, search, healthFilter, page],
+    queryKey: ['services', search, healthFilter, page],
     queryFn: () =>
-      fetchServices(token || '', {
+      fetchServices({
         search: search || undefined,
         health: healthFilter !== 'all' ? (healthFilter as EnvironmentStatus) : undefined,
         page,
@@ -44,7 +44,6 @@ export function CatalogPage() {
         sort: 'createdAt',
         order: 'desc',
       }),
-    enabled: Boolean(token),
   });
 
   const getHealthBadge = (health: EnvironmentStatus) => {

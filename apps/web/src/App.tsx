@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAppAuth } from './context/auth-context';
 import { AppShell } from './components/layout/app-shell';
-import { SignInScreen } from './components/auth/sign-in-screen';
 import { DashboardPage } from './pages/dashboard-page';
 import { CatalogPage } from './pages/catalog-page';
 import { CreateServicePage } from './pages/create-service-page';
@@ -11,18 +10,28 @@ import { ServiceDetailPage } from './pages/service-detail-page';
 import { TemplatesPage } from './pages/templates-page';
 import { ComingSoonPage } from './pages/coming-soon-page';
 import { Skeleton } from './components/ui/skeleton';
+import { ErrorBoundary } from './components/error-boundary';
+import { ApiError } from './lib/api-client';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: (failureCount, error) => {
+        // Retry network / transient errors up to 3 times before rendering error state
+        if (failureCount >= 3) return false;
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+          return false;
+        }
+        return true;
+      },
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 3000),
       refetchOnWindowFocus: false,
     },
   },
 });
 
 function AppRouter() {
-  const { isSignedIn, isLoaded } = useAppAuth();
+  const { isLoaded } = useAppAuth();
 
   if (!isLoaded) {
     return (
@@ -33,14 +42,12 @@ function AppRouter() {
     );
   }
 
-  if (!isSignedIn) {
-    return <SignInScreen />;
-  }
-
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route path="/" element={<DashboardPage />} />
+        {/* Root redirect to /dashboard Overview page */}
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/services" element={<CatalogPage />} />
         <Route path="/services/new" element={<CreateServicePage />} />
         <Route path="/services/:id" element={<ServiceDetailPage />} />
@@ -96,7 +103,8 @@ function AppRouter() {
           }
         />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* Fallback Catch-All */}
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
   );
@@ -104,13 +112,15 @@ function AppRouter() {
 
 export function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <AppRouter />
-        </BrowserRouter>
-      </AuthProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <BrowserRouter>
+            <AppRouter />
+          </BrowserRouter>
+        </AuthProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

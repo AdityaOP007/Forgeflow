@@ -9,6 +9,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       port: 5173,
+      strictPort: true,
+      open: !process.env.CI ? '/dashboard' : false,
       proxy: {
         '/api': {
           target: apiUrl,

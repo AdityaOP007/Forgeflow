@@ -24,7 +24,7 @@ import { Input, Textarea } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 
 export function CreateServicePage() {
-  const { role, token } = useAppAuth();
+  const { role } = useAppAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -52,9 +52,8 @@ export function CreateServicePage() {
 
   // Fetch templates for dropdown
   const { data: templates, isLoading: loadingTemplates } = useQuery({
-    queryKey: ['templates', token],
-    queryFn: () => fetchTemplates(token || ''),
-    enabled: Boolean(token),
+    queryKey: ['templates'],
+    queryFn: () => fetchTemplates(),
   });
 
   const {
@@ -84,7 +83,7 @@ export function CreateServicePage() {
   const generatedSlug = watchedName ? generateSlug(watchedName) : '';
 
   const mutation = useMutation({
-    mutationFn: (data: CreateServiceInput) => createService(token || '', data),
+    mutationFn: (data: CreateServiceInput) => createService(data),
     onSuccess: (createdService) => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardSummary'] });
