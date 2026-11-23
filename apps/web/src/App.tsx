@@ -1,48 +1,117 @@
-import { useEffect, useState } from 'react';
-import { fetchHealth } from './lib/api-client';
+import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthProvider, useAppAuth } from './context/auth-context';
+import { AppShell } from './components/layout/app-shell';
+import { SignInScreen } from './components/auth/sign-in-screen';
+import { DashboardPage } from './pages/dashboard-page';
+import { CatalogPage } from './pages/catalog-page';
+import { CreateServicePage } from './pages/create-service-page';
+import { ServiceDetailPage } from './pages/service-detail-page';
+import { TemplatesPage } from './pages/templates-page';
+import { ComingSoonPage } from './pages/coming-soon-page';
+import { Skeleton } from './components/ui/skeleton';
 
-export function App() {
-  const [status, setStatus] = useState<string>('checking...');
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
-  useEffect(() => {
-    fetchHealth()
-      .then((data) => {
-        if (data.status === 'ok') {
-          setStatus('ok');
-        } else {
-          setStatus('unreachable');
-        }
-      })
-      .catch(() => {
-        setStatus('unreachable');
-      });
-  }, []);
+function AppRouter() {
+  const { isSignedIn, isLoaded } = useAppAuth();
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 space-y-4">
+        <Skeleton className="h-10 w-10 rounded-full" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+    );
+  }
+
+  if (!isSignedIn) {
+    return <SignInScreen />;
+  }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-md p-8 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl text-center space-y-4">
-        <h1 className="text-3xl font-bold tracking-tight text-white">ForgeFlow</h1>
-        <p className="text-sm text-slate-400">Internal Developer Platform</p>
-        <div className="pt-4 border-t border-slate-800">
-          <p className="text-sm font-medium">
-            API:{' '}
-            <span
-              className={
-                status === 'ok'
-                  ? 'text-emerald-400 font-semibold'
-                  : status === 'unreachable'
-                    ? 'text-rose-400 font-semibold'
-                    : 'text-amber-400 font-semibold'
-              }
-            >
-              {status}
-            </span>
-          </p>
-        </div>
-      </div>
-    </main>
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/services" element={<CatalogPage />} />
+        <Route path="/services/new" element={<CreateServicePage />} />
+        <Route path="/services/:id" element={<ServiceDetailPage />} />
+        <Route path="/templates" element={<TemplatesPage />} />
+
+        {/* Coming Soon Feature Routes */}
+        <Route
+          path="/deployments"
+          element={
+            <ComingSoonPage
+              title="Deployments"
+              description="Orchestrate and track multi-environment container deployments across Kubernetes clusters."
+              phase="Phase 3: Deployments & Environments"
+              phaseNumber={3}
+              icon="deployments"
+            />
+          }
+        />
+        <Route
+          path="/observability"
+          element={
+            <ComingSoonPage
+              title="Observability & Metrics"
+              description="Real-time Prometheus metrics, Grafana dashboards, and container health telemetry."
+              phase="Phase 4: Monitoring & Metrics"
+              phaseNumber={4}
+              icon="observability"
+            />
+          }
+        />
+        <Route
+          path="/activity"
+          element={
+            <ComingSoonPage
+              title="Activity Logs"
+              description="Audit log stream tracking service mutations, pipeline triggers, and security events."
+              phase="Phase 4: Audit Logs & Activity Stream"
+              phaseNumber={4}
+              icon="activity"
+            />
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ComingSoonPage
+              title="Platform Settings"
+              description="Team role-based access control, GitHub app integrations, and cloud cluster credentials."
+              phase="Phase 4: Platform Settings & Integrations"
+              phaseNumber={4}
+              icon="settings"
+            />
+          }
+        />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  );
+}
+
+export function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <BrowserRouter>
+          <AppRouter />
+        </BrowserRouter>
+      </AuthProvider>
+    </QueryClientProvider>
   );
 }
 
 export default App;
-

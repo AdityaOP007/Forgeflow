@@ -12,9 +12,7 @@ dashboardRouter.get(
   async (_req: Request, res: Response<DashboardSummary>, next: NextFunction) => {
     try {
       // Total services
-      const [{ value: totalServices }] = await db
-        .select({ value: count() })
-        .from(services);
+      const [{ value: totalServices }] = await db.select({ value: count() }).from(services);
 
       // Get all environment statuses
       const envStatuses = await db
@@ -62,10 +60,7 @@ dashboardRouter.get(
         .select({ value: count() })
         .from(workflowRuns)
         .where(
-          and(
-            eq(workflowRuns.status, 'failed'),
-            gte(workflowRuns.started_at, twentyFourHoursAgo)
-          )
+          and(eq(workflowRuns.status, 'failed'), gte(workflowRuns.started_at, twentyFourHoursAgo))
         );
 
       res.json({

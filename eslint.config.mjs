@@ -4,12 +4,7 @@ import prettierConfig from 'eslint-config-prettier';
 
 export default tseslint.config(
   {
-    ignores: [
-      '**/node_modules/**',
-      '**/dist/**',
-      '**/build/**',
-      '**/.pnpm-store/**',
-    ],
+    ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.pnpm-store/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -23,4 +18,3 @@ export default tseslint.config(
     },
   }
 );
-

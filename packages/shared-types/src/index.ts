@@ -20,13 +20,7 @@ export type EnvironmentName = z.infer<typeof EnvironmentName>;
 export const EnvironmentStatus = z.enum(['unknown', 'healthy', 'degraded', 'failed', 'drifted']);
 export type EnvironmentStatus = z.infer<typeof EnvironmentStatus>;
 
-export const WorkflowRunStatus = z.enum([
-  'queued',
-  'running',
-  'succeeded',
-  'failed',
-  'cancelled',
-]);
+export const WorkflowRunStatus = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
 export type WorkflowRunStatus = z.infer<typeof WorkflowRunStatus>;
 
 // ─── Service validation ─────────────────────────────────────────────
@@ -37,18 +31,24 @@ const dangerousPattern = /[/\\]|\.\./;
 
 export const serviceNameSchema = z
   .string()
-  .min(3, 'Name must be at least 3 characters')
-  .max(40, 'Name must be at most 40 characters')
+  .regex(
+    slugPattern,
+    'Name must be lowercase letters, numbers, hyphens; start with a letter; 3 to 40 characters'
+  )
   .refine((v) => !dangerousPattern.test(v), 'Name contains invalid characters');
 
 export const serviceSlugSchema = z
   .string()
-  .regex(slugPattern, 'Slug must be lowercase letters, numbers, hyphens; start with a letter; 3-40 chars')
+  .regex(
+    slugPattern,
+    'Slug must be lowercase letters, numbers, hyphens; start with a letter; 3-40 chars'
+  )
   .refine((v) => !dangerousPattern.test(v), 'Slug contains invalid characters');
 
-// Shared repository URL schema: http/https only, optional, empty string transformed to undefined
+// Shared repository URL schema: http/https only, optional, max 2048, empty/whitespace transformed to undefined
 export const repositoryUrlSchema = z
   .string()
+  .max(2048, 'Repository URL must be at most 2048 characters')
   .transform((val) => val.trim())
   .transform((val) => (val === '' ? undefined : val))
   .optional()
@@ -81,7 +81,7 @@ export type CreateServiceInput = z.infer<typeof createServiceSchema>;
 export const updateServiceSchema = z.object({
   name: serviceNameSchema.optional(),
   description: z.string().max(500).optional(),
-  repositoryUrl: repositoryUrlSchema,
+  repositoryUrl: z.union([repositoryUrlSchema, z.null()]).optional(),
 });
 export type UpdateServiceInput = z.infer<typeof updateServiceSchema>;
 

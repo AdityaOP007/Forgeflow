@@ -10,7 +10,12 @@ const envSchema = z.object({
   ADMIN_EMAILS: z
     .string()
     .default('')
-    .transform((v) => v.split(',').map((e) => e.trim()).filter(Boolean)),
+    .transform((v) =>
+      v
+        .split(',')
+        .map((e) => e.trim())
+        .filter(Boolean)
+    ),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -33,4 +38,3 @@ export function getEnv(): Env {
   if (!_env) return loadEnv();
   return _env;
 }
-

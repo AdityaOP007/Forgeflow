@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import { createServiceSchema, updateServiceSchema, listServicesQuerySchema } from '@forgeflow/shared-types';
+import {
+  createServiceSchema,
+  updateServiceSchema,
+  listServicesQuerySchema,
+} from '@forgeflow/shared-types';
 import type { ServiceListItem, PaginatedResponse } from '@forgeflow/shared-types';
 import { requireRole } from '../../middleware/requireRole.js';
 import { validate } from '../../middleware/validate.js';

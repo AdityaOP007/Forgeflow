@@ -2,10 +2,12 @@
   "name": "forgeflow",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@12.21.0",
   "scripts": {
     "dev": "pnpm --filter @forgeflow/api --filter @forgeflow/web --parallel dev",
     "build": "pnpm -r run build",
-    "lint": "eslint .",
+    "test": "pnpm -r run test",
+    "lint": "eslint . && prettier --check .",
     "typecheck": "pnpm -r run typecheck",
     "format": "prettier --write .",
     "db:generate": "pnpm --filter @forgeflow/api db:generate",

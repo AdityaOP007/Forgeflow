@@ -23,4 +23,8 @@ declare global {
 /* eslint-enable @typescript-eslint/no-namespace */
 
 // The auth verifier function type — injectable for testing
-export type AuthVerifier = (req: Request, res: Response, next: NextFunction) => void | Promise<void>;
+export type AuthVerifier = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => void | Promise<void>;

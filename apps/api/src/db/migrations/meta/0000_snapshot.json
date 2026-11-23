@@ -69,12 +69,8 @@
           "name": "audit_logs_actor_id_users_id_fk",
           "tableFrom": "audit_logs",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -158,12 +154,8 @@
           "name": "environments_service_id_services_id_fk",
           "tableFrom": "environments",
           "tableTo": "services",
-          "columnsFrom": [
-            "service_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["service_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -173,10 +165,7 @@
         "environments_service_name_unique": {
           "name": "environments_service_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "service_id",
-            "name"
-          ]
+          "columns": ["service_id", "name"]
         }
       },
       "policies": {},
@@ -282,12 +271,8 @@
           "name": "services_owner_id_users_id_fk",
           "tableFrom": "services",
           "tableTo": "users",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -295,12 +280,8 @@
           "name": "services_template_id_templates_id_fk",
           "tableFrom": "services",
           "tableTo": "templates",
-          "columnsFrom": [
-            "template_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["template_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -310,9 +291,7 @@
         "services_slug_unique": {
           "name": "services_slug_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
+          "columns": ["slug"]
         }
       },
       "policies": {},
@@ -381,9 +360,7 @@
         "templates_slug_unique": {
           "name": "templates_slug_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
+          "columns": ["slug"]
         }
       },
       "policies": {},
@@ -442,16 +419,12 @@
         "users_clerk_id_unique": {
           "name": "users_clerk_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "clerk_id"
-          ]
+          "columns": ["clerk_id"]
         },
         "users_email_unique": {
           "name": "users_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         }
       },
       "policies": {},
@@ -535,12 +508,8 @@
           "name": "workflow_runs_service_id_services_id_fk",
           "tableFrom": "workflow_runs",
           "tableTo": "services",
-          "columnsFrom": [
-            "service_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["service_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -556,42 +525,22 @@
     "public.environment_name": {
       "name": "environment_name",
       "schema": "public",
-      "values": [
-        "development",
-        "staging",
-        "production"
-      ]
+      "values": ["development", "staging", "production"]
     },
     "public.environment_status": {
       "name": "environment_status",
       "schema": "public",
-      "values": [
-        "unknown",
-        "healthy",
-        "degraded",
-        "failed",
-        "drifted"
-      ]
+      "values": ["unknown", "healthy", "degraded", "failed", "drifted"]
     },
     "public.user_role": {
       "name": "user_role",
       "schema": "public",
-      "values": [
-        "admin",
-        "developer",
-        "viewer"
-      ]
+      "values": ["admin", "developer", "viewer"]
     },
     "public.workflow_run_status": {
       "name": "workflow_run_status",
       "schema": "public",
-      "values": [
-        "queued",
-        "running",
-        "succeeded",
-        "failed",
-        "cancelled"
-      ]
+      "values": ["queued", "running", "succeeded", "failed", "cancelled"]
     }
   },
   "schemas": {},

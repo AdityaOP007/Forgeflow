@@ -7,16 +7,7 @@ import {
   workflowRuns,
   auditLogs,
 } from '../../db/schema.js';
-import {
-  eq,
-  sql,
-  ilike,
-  and,
-  desc,
-  asc,
-  count,
-  inArray,
-} from 'drizzle-orm';
+import { eq, sql, ilike, and, desc, asc, count, inArray } from 'drizzle-orm';
 import type {
   CreateServiceInput,
   UpdateServiceInput,
@@ -61,10 +52,7 @@ export async function listServices(
   const orderFn = order === 'asc' ? asc : desc;
 
   // Get total count
-  const [{ value: total }] = await db
-    .select({ value: count() })
-    .from(services)
-    .where(whereClause);
+  const [{ value: total }] = await db.select({ value: count() }).from(services).where(whereClause);
 
   // Get paginated rows with owner and template joins
   const rows = await db
@@ -166,10 +154,7 @@ export async function getServiceById(id: string): Promise<ServiceDetail | null> 
   const r = row[0];
 
   // Get environments
-  const envs = await db
-    .select()
-    .from(environments)
-    .where(eq(environments.service_id, id));
+  const envs = await db.select().from(environments).where(eq(environments.service_id, id));
 
   // Get recent workflow runs (last 20)
   const runs = await db
@@ -291,7 +276,10 @@ export async function updateService(
 
 // ─── Delete service ──────────────────────────────────────────────────
 export async function deleteService(id: string): Promise<boolean> {
-  const result = await db.delete(services).where(eq(services.id, id)).returning({ id: services.id });
+  const result = await db
+    .delete(services)
+    .where(eq(services.id, id))
+    .returning({ id: services.id });
   return result.length > 0;
 }
 

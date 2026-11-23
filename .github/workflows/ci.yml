@@ -8,8 +8,33 @@ on:
 
 jobs:
   validate:
-    name: Lint, Typecheck, and Build
+    name: Lint, Typecheck, Test, and Build
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: forgeflow
+          POSTGRES_PASSWORD: forgeflow_password
+          POSTGRES_DB: forgeflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PORT: 4000
+      NODE_ENV: test
+      DATABASE_URL: postgresql://forgeflow:forgeflow_password@localhost:5432/forgeflow_test
+      TEST_DATABASE_URL: postgresql://forgeflow:forgeflow_password@localhost:5432/forgeflow_test
+      WEB_ORIGIN: http://localhost:5173
+      CLERK_SECRET_KEY: fake_clerk_secret_key_for_ci_placeholder
+      CLERK_PUBLISHABLE_KEY: fake_clerk_publishable_key_for_ci_placeholder
+      ADMIN_EMAILS: ci-admin@forgeflow.local
 
     steps:
       - name: Checkout repository
@@ -17,8 +42,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -35,6 +58,13 @@ jobs:
       - name: Run typecheck
         run: pnpm typecheck
 
+      - name: Run database migrations
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: postgresql://forgeflow:forgeflow_password@localhost:5432/forgeflow_test
+
+      - name: Run tests
+        run: pnpm test
+
       - name: Run build
         run: pnpm build
-

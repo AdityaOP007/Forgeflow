@@ -13,4 +13,3 @@ export default defineConfig({
       'postgresql://forgeflow:forgeflow_password@localhost:5432/forgeflow',
   },
 });
-

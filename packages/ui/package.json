@@ -14,10 +14,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'ui: placeholder tests'"
   },
   "devDependencies": {
     "typescript": "^5.7.3"
   }
 }
-

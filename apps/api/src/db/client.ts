@@ -19,4 +19,3 @@ export function createDbClient(poolInstance?: pg.Pool) {
 
 export const pool = createDbPool();
 export const db = createDbClient(pool);
-
