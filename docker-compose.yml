@@ -1,21 +1,23 @@
-# Docker Compose configuration for ForgeFlow
-# Phase 0: Placeholder configuration. Services will be enabled in Phase 1+.
-
 services:
-  # Placeholder PostgreSQL service for Phase 1 (database client and persistence)
-  # postgres:
-  #   image: postgres:16-alpine
-  #   container_name: forgeflow-postgres
-  #   restart: unless-stopped
-  #   environment:
-  #     POSTGRES_USER: forgeflow
-  #     POSTGRES_PASSWORD: forgeflow_password
-  #     POSTGRES_DB: forgeflow
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
+  postgres:
+    image: postgres:16-alpine
+    container_name: forgeflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forgeflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forgeflow_password}
+      POSTGRES_DB: ${POSTGRES_DB:-forgeflow}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forgeflow} -d ${POSTGRES_DB:-forgeflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
-# volumes:
-#   postgres_data:
-
+volumes:
+  postgres_data:

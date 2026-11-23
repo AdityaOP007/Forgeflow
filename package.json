@@ -7,7 +7,12 @@
     "build": "pnpm -r run build",
     "lint": "eslint .",
     "typecheck": "pnpm -r run typecheck",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "db:generate": "pnpm --filter @forgeflow/api db:generate",
+    "db:migrate": "pnpm --filter @forgeflow/api db:migrate",
+    "db:seed": "pnpm --filter @forgeflow/api db:seed",
+    "db:studio": "pnpm --filter @forgeflow/api db:studio",
+    "db:reset": "pnpm --filter @forgeflow/api db:reset"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
