@@ -22,6 +22,13 @@ export type EnvironmentStatus = z.infer<typeof EnvironmentStatus>;
 
 export const WorkflowRunStatus = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
 export type WorkflowRunStatus = z.infer<typeof WorkflowRunStatus>;
+export type WorkflowStatus = WorkflowRunStatus;
+
+export const WorkflowStepStatus = z.enum(['waiting', 'running', 'succeeded', 'failed', 'skipped']);
+export type WorkflowStepStatus = z.infer<typeof WorkflowStepStatus>;
+
+export const ServiceProvisioningStatus = z.enum(['provisioning', 'ready', 'failed']);
+export type ServiceProvisioningStatus = z.infer<typeof ServiceProvisioningStatus>;
 
 // ─── Service validation ─────────────────────────────────────────────
 // Lowercase letters, numbers, hyphens; starts with a letter; 3-40 chars.
@@ -173,6 +180,45 @@ export interface WorkflowRunItem {
   startedAt: string | null;
   completedAt: string | null;
   errorSummary: string | null;
+}
+
+export interface WorkflowStep {
+  id: string;
+  workflowRunId: string;
+  key: string;
+  name: string;
+  position: number;
+  status: WorkflowStepStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorSummary: string | null;
+}
+
+export interface WorkflowLog {
+  id: number;
+  workflowRunId: string;
+  stepKey: string | null;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  createdAt: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  serviceId: string;
+  type: string;
+  status: WorkflowStatus;
+  input: Record<string, unknown>;
+  resources: Record<string, unknown>;
+  attempts: number;
+  lockedAt: string | null;
+  lockedBy: string | null;
+  cancelRequested: boolean;
+  createdBy: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorSummary: string | null;
+  createdAt: string;
 }
 
 export interface ServiceDetail extends ServiceListItem {

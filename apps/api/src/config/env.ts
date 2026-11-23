@@ -6,6 +6,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   LOCAL_USER_EMAIL: z.string().email().default('admin@forgeflow.local'),
+  WORKER_POLL_MS: z.coerce.number().default(1000),
+  WORKER_STALE_MS: z.coerce.number().default(120000),
 });
 
 export type Env = z.infer<typeof envSchema>;

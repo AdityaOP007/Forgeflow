@@ -1,4 +1,16 @@
-import { pgTable, uuid, text, timestamp, pgEnum, unique, index } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  pgEnum,
+  unique,
+  index,
+  jsonb,
+  integer,
+  boolean,
+  bigserial,
+} from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 // Enums
@@ -24,6 +36,20 @@ export const workflowRunStatusEnum = pgEnum('workflow_run_status', [
   'succeeded',
   'failed',
   'cancelled',
+]);
+
+export const serviceProvisioningStatusEnum = pgEnum('service_provisioning_status', [
+  'provisioning',
+  'ready',
+  'failed',
+]);
+
+export const workflowStepStatusEnum = pgEnum('workflow_step_status', [
+  'waiting',
+  'running',
+  'succeeded',
+  'failed',
+  'skipped',
 ]);
 
 // 1. Users table
@@ -61,6 +87,10 @@ export const services = pgTable(
       .notNull(),
     repository_url: text('repository_url'),
     template_id: uuid('template_id').references(() => templates.id),
+    provisioning_status: serviceProvisioningStatusEnum('provisioning_status')
+      .default('ready')
+      .notNull(),
+    template_version: text('template_version'),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -101,14 +131,64 @@ export const workflowRuns = pgTable(
     type: text('type').notNull(),
     status: workflowRunStatusEnum('status').notNull(),
     external_run_id: text('external_run_id'),
+    input: jsonb('input').$type<Record<string, unknown>>().default({}).notNull(),
+    resources: jsonb('resources').$type<Record<string, unknown>>().default({}).notNull(),
+    attempts: integer('attempts').default(0).notNull(),
+    locked_at: timestamp('locked_at', { withTimezone: true }),
+    locked_by: text('locked_by'),
+    cancel_requested: boolean('cancel_requested').default(false).notNull(),
+    created_by: uuid('created_by').references(() => users.id),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+    error_summary: text('error_summary'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('workflow_runs_service_id_idx').on(table.service_id),
+    index('workflow_runs_status_created_at_idx').on(table.status, table.created_at),
+    index('workflow_runs_service_id_created_at_idx').on(table.service_id, table.created_at),
+  ]
+);
+
+// 6. Workflow Steps table
+export const workflowSteps = pgTable(
+  'workflow_steps',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workflow_run_id: uuid('workflow_run_id')
+      .references(() => workflowRuns.id, { onDelete: 'cascade' })
+      .notNull(),
+    key: text('key').notNull(),
+    name: text('name').notNull(),
+    position: integer('position').notNull(),
+    status: workflowStepStatusEnum('status').default('waiting').notNull(),
     started_at: timestamp('started_at', { withTimezone: true }),
     completed_at: timestamp('completed_at', { withTimezone: true }),
     error_summary: text('error_summary'),
   },
-  (table) => [index('workflow_runs_service_id_idx').on(table.service_id)]
+  (table) => [
+    unique('workflow_steps_run_key_unique').on(table.workflow_run_id, table.key),
+    index('workflow_steps_workflow_run_id_idx').on(table.workflow_run_id),
+  ]
 );
 
-// 6. Audit Logs table
+// 7. Workflow Logs table
+export const workflowLogs = pgTable(
+  'workflow_logs',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    workflow_run_id: uuid('workflow_run_id')
+      .references(() => workflowRuns.id, { onDelete: 'cascade' })
+      .notNull(),
+    step_key: text('step_key'),
+    level: text('level').notNull(), // 'info' | 'warn' | 'error'
+    message: text('message').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index('workflow_logs_run_id_id_idx').on(table.workflow_run_id, table.id)]
+);
+
+// 8. Audit Logs table
 export const auditLogs = pgTable(
   'audit_logs',
   {
@@ -128,6 +208,7 @@ export const auditLogs = pgTable(
 export const usersRelations = relations(users, ({ many }) => ({
   services: many(services),
   auditLogs: many(auditLogs),
+  createdWorkflowRuns: many(workflowRuns),
 }));
 
 export const templatesRelations = relations(templates, ({ many }) => ({
@@ -154,10 +235,30 @@ export const environmentsRelations = relations(environments, ({ one }) => ({
   }),
 }));
 
-export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
+export const workflowRunsRelations = relations(workflowRuns, ({ one, many }) => ({
   service: one(services, {
     fields: [workflowRuns.service_id],
     references: [services.id],
+  }),
+  creator: one(users, {
+    fields: [workflowRuns.created_by],
+    references: [users.id],
+  }),
+  steps: many(workflowSteps),
+  logs: many(workflowLogs),
+}));
+
+export const workflowStepsRelations = relations(workflowSteps, ({ one }) => ({
+  workflowRun: one(workflowRuns, {
+    fields: [workflowSteps.workflow_run_id],
+    references: [workflowRuns.id],
+  }),
+}));
+
+export const workflowLogsRelations = relations(workflowLogs, ({ one }) => ({
+  workflowRun: one(workflowRuns, {
+    fields: [workflowLogs.workflow_run_id],
+    references: [workflowRuns.id],
   }),
 }));
 

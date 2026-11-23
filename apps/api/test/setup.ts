@@ -1,6 +1,14 @@
 import { beforeEach, afterAll } from 'vitest';
 import { db, pool } from '../src/db/client.js';
-import { users, auditLogs, workflowRuns, environments, services } from '../src/db/schema.js';
+import {
+  users,
+  auditLogs,
+  workflowRuns,
+  environments,
+  services,
+  workflowSteps,
+  workflowLogs,
+} from '../src/db/schema.js';
 import { createApp } from '../src/app.js';
 import type { AuthVerifier } from '../src/middleware/types.js';
 
@@ -71,6 +79,8 @@ export async function cleanTables() {
       `Safety guard: Refusing to clean tables because connected database '${dbName}' does not end with '_test'`
     );
   }
+  await db.delete(workflowLogs);
+  await db.delete(workflowSteps);
   await db.delete(auditLogs);
   await db.delete(workflowRuns);
   await db.delete(environments);
