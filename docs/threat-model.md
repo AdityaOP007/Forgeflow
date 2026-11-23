@@ -22,7 +22,7 @@ This document outlines the threat model, security posture, and defensive control
 | Accidental deployment of local auth to prod | Critical | Hard safety rule in `apps/api/src/config/env.ts`: if `NODE_ENV === 'production'`, startup throws a fatal error: `"Local auth cannot be used in production"`.                                                      |
 | Network exposure of unauthenticated API     | High     | The Express server explicitly binds to `127.0.0.1` (loopback only) rather than `0.0.0.0`. CORS is strictly restricted to `WEB_ORIGIN` (default `http://localhost:5173`).                                          |
 | Header injection / token confusion          | Medium   | The local auth verifier ignores any incoming `Authorization` headers entirely, resolving only to the local administrator row.                                                                                     |
-| Concurrent startup user provisioning race   | Medium   | User provisioning uses an atomic PostgreSQL `INSERT ... ON CONFLICT (clerk_id) DO UPDATE` query with in-memory caching and single-flight deduplication, eliminating select-then-insert race conditions.           |
+| Concurrent startup user provisioning race   | Medium   | User provisioning uses an atomic PostgreSQL `INSERT ... ON CONFLICT (clerk_id) DO UPDATE` query on each request, eliminating select-then-insert race conditions.                                                  |
 | External Identity Decoupling                | Low      | The `clerk_id` column is maintained as an external-auth identity placeholder. Full Clerk auth is preserved in git tag `phase-1-clerk` and will be reintroduced later alongside an enterprise SSO provider option. |
 
 ### B. Authorization & Privilege Escalation

@@ -10,65 +10,41 @@ import type { AuthVerifier } from './types.js';
  */
 export const LOCAL_ADMIN_CLERK_ID = 'local-admin';
 
-let cachedLocalUser: typeof users.$inferSelect | null = null;
-let inFlightLocalUserPromise: Promise<typeof users.$inferSelect> | null = null;
-
-export function resetLocalUserCache(): void {
-  cachedLocalUser = null;
-  inFlightLocalUserPromise = null;
-}
-
 /**
- * Atomically upsert the single local admin user into the users table.
- * Caches the resolved user row in memory so subsequent requests hit memory, not the database.
- * Handles concurrent requests safely via single-flight deduplication.
+ * Atomically upsert the single local admin user into the users table and return the row.
+ * Each request performs one atomic upsert (insert ... on conflict (clerk_id) do update).
  */
 export async function getOrCreateLocalUser(): Promise<typeof users.$inferSelect> {
-  if (cachedLocalUser) {
-    return cachedLocalUser;
-  }
-  if (inFlightLocalUserPromise) {
-    return inFlightLocalUserPromise;
-  }
+  const env = getEnv();
+  const email = (env.LOCAL_USER_EMAIL || 'admin@forgeflow.local').trim().toLowerCase();
+  const name = 'Local Admin';
 
-  inFlightLocalUserPromise = (async () => {
-    const env = getEnv();
-    const email = (env.LOCAL_USER_EMAIL || 'admin@forgeflow.local').trim().toLowerCase();
-    const name = 'Local Admin';
-
-    const [user] = await db
-      .insert(users)
-      .values({
-        clerk_id: LOCAL_ADMIN_CLERK_ID,
+  const [user] = await db
+    .insert(users)
+    .values({
+      clerk_id: LOCAL_ADMIN_CLERK_ID,
+      email,
+      name,
+      role: 'admin',
+    })
+    .onConflictDoUpdate({
+      target: users.clerk_id,
+      set: {
         email,
         name,
         role: 'admin',
-      })
-      .onConflictDoUpdate({
-        target: users.clerk_id,
-        set: {
-          email,
-          name,
-          role: 'admin',
-        },
-      })
-      .returning();
+      },
+    })
+    .returning();
 
-    cachedLocalUser = user;
-    return user;
-  })();
-
-  try {
-    return await inFlightLocalUserPromise;
-  } finally {
-    inFlightLocalUserPromise = null;
-  }
+  return user;
 }
 
 /**
  * Local development auth verifier.
  * Runs ForgeFlow as a single built-in local admin user and completely ignores
  * any incoming Authorization header.
+ * Each request performs one atomic upsert and uses the returned row.
  */
 export const localUserAuthVerifier: AuthVerifier = async (
   req: Request,

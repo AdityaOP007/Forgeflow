@@ -18,7 +18,7 @@ import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
 
 export function DashboardPage() {
-  const { user, role } = useAppAuth();
+  const { role } = useAppAuth();
   const navigate = useNavigate();
 
   const {
@@ -68,11 +68,6 @@ export function DashboardPage() {
 
   // Get Started checklist computed dynamically from real data (no saved flags)
   const checklist = [
-    {
-      title: 'Authenticate account',
-      description: `Signed in as ${user?.email || 'authenticated user'} (${role})`,
-      done: Boolean(user),
-    },
     {
       title: 'Provision your first service',
       description: 'Create a microservice from a standardized architecture template',
@@ -163,7 +158,7 @@ export function DashboardPage() {
           Follow these milestones to bring your first service to production.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {checklist.map((item, index) => (
             <div
               key={item.title}

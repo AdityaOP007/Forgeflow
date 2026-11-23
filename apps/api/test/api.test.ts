@@ -5,11 +5,7 @@ import { db, pool } from '../src/db/client.js';
 import { users, services, environments, workflowRuns, auditLogs } from '../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
-import {
-  localUserAuthVerifier,
-  resetLocalUserCache,
-  LOCAL_ADMIN_CLERK_ID,
-} from '../src/middleware/auth.js';
+import { localUserAuthVerifier, LOCAL_ADMIN_CLERK_ID } from '../src/middleware/auth.js';
 import { loadEnv, resetEnv } from '../src/config/env.js';
 import pg from 'pg';
 
@@ -693,11 +689,7 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
   describe('Local-User Auth and Safety Guards', () => {
     const localApp = createApp({ auth: localUserAuthVerifier });
 
-    beforeEach(() => {
-      resetLocalUserCache();
-    });
-
-    it('GET /api/me without any auth header returns 200 with role admin and local user data', async () => {
+    it('GET /api/me with no header returns admin role and local user data', async () => {
       const res = await request(localApp).get('/api/me');
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({
@@ -718,10 +710,9 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
       expect(dbRow?.email).toBe('admin@forgeflow.local');
     });
 
-    it('two concurrent first requests create exactly one users row and both succeed', async () => {
+    it('two concurrent first requests create one users row and both succeed', async () => {
       // Ensure local admin does not exist before requests
       await db.delete(users).where(eq(users.clerk_id, LOCAL_ADMIN_CLERK_ID));
-      resetLocalUserCache();
 
       const [res1, res2] = await Promise.all([
         request(localApp).get('/api/me'),
@@ -740,7 +731,7 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
       expect(rows[0].email).toBe('admin@forgeflow.local');
     });
 
-    it('starting the app with NODE_ENV=production throws the safety error', () => {
+    it('production mode with local auth throws the safety error', () => {
       const originalNodeEnv = process.env.NODE_ENV;
       try {
         process.env.NODE_ENV = 'production';
