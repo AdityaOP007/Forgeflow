@@ -1,12 +1,16 @@
 import dotenv from 'dotenv';
-import { createApp } from './app.js';
-
 dotenv.config();
 
-const port = Number(process.env.PORT) || 4000;
-const app = createApp();
+import { loadEnv } from './config/env.js';
+import { createApp } from './app.js';
+import { clerkAuthVerifier } from './middleware/auth.js';
 
-app.listen(port, () => {
-  console.log(`ForgeFlow API listening on port ${port}`);
+const env = loadEnv();
+const app = createApp({
+  auth: clerkAuthVerifier,
+  webOrigin: env.WEB_ORIGIN,
 });
 
+app.listen(env.PORT, () => {
+  console.log(`ForgeFlow API listening on port ${env.PORT}`);
+});
