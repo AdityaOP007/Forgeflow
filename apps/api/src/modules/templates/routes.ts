@@ -4,6 +4,7 @@ import type { TemplateItem } from '@forgeflow/shared-types';
 import { db } from '../../db/client.js';
 import { templates } from '../../db/schema.js';
 import { asc } from 'drizzle-orm';
+import { isTemplateAvailable } from '../../templates/registry.js';
 
 export const templatesRouter = Router();
 
@@ -17,6 +18,7 @@ templatesRouter.get('/', async (_req: Request, res: Response<TemplateItem[]>) =>
     framework: r.framework,
     version: r.version,
     sourceLocation: r.source_location,
+    available: isTemplateAvailable(r.slug),
     createdAt: r.created_at.toISOString(),
   }));
   res.json(result);

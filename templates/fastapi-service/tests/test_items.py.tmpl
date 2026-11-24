@@ -1,0 +1,42 @@
+from fastapi.testclient import TestClient
+
+
+def test_items_crud(client: TestClient) -> None:
+    # Create
+    create_resp = client.post("/items", json={"name": "widget", "quantity": 5})
+    assert create_resp.status_code == 201
+    created = create_resp.json()
+    assert created["name"] == "widget"
+    assert created["quantity"] == 5
+    item_id = created["id"]
+
+    # List
+    list_resp = client.get("/items")
+    assert list_resp.status_code == 200
+    assert len(list_resp.json()) == 1
+
+    # Get
+    get_resp = client.get(f"/items/{item_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["id"] == item_id
+
+    # Patch
+    patch_resp = client.patch(f"/items/{item_id}", json={"quantity": 10})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["quantity"] == 10
+
+    # Delete
+    del_resp = client.delete(f"/items/{item_id}")
+    assert del_resp.status_code == 204
+
+    # Get missing
+    missing_resp = client.get(f"/items/{item_id}")
+    assert missing_resp.status_code == 404
+
+
+def test_create_item_validation(client: TestClient) -> None:
+    resp_empty = client.post("/items", json={"name": "", "quantity": 1})
+    assert resp_empty.status_code == 422
+
+    resp_negative = client.post("/items", json={"name": "bolt", "quantity": -1})
+    assert resp_negative.status_code == 422

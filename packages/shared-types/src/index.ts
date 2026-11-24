@@ -142,6 +142,7 @@ export interface TemplateItem {
   framework: string;
   version: string;
   sourceLocation: string;
+  available: boolean;
   createdAt: string;
 }
 

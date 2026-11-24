@@ -1,0 +1,87 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.database import Base, engine, get_db
+from app.models import Item
+from app.schemas import ItemCreate, ItemResponse, ItemUpdate
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(title=settings.service_name, lifespan=lifespan)
+
+DbSession = Annotated[Session, Depends(get_db)]
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready(db: DbSession) -> Response:
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unavailable"},
+        )
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ready"})
+
+
+@app.post("/items", response_model=ItemResponse, status_code=status.HTTP_201_CREATED)
+def create_item(payload: ItemCreate, db: DbSession) -> Item:
+    item = Item(name=payload.name, quantity=payload.quantity)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/items", response_model=list[ItemResponse])
+def list_items(db: DbSession) -> list[Item]:
+    return list(db.scalars(select(Item).order_by(Item.id)).all())
+
+
+@app.get("/items/{item_id}", response_model=ItemResponse)
+def get_item(item_id: int, db: DbSession) -> Item:
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    return item
+
+
+@app.patch("/items/{item_id}", response_model=ItemResponse)
+def update_item(item_id: int, payload: ItemUpdate, db: DbSession) -> Item:
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    if payload.name is not None:
+        item.name = payload.name
+    if payload.quantity is not None:
+        item.quantity = payload.quantity
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_item(item_id: int, db: DbSession) -> Response:
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    db.delete(item)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
