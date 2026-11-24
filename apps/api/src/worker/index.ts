@@ -4,9 +4,8 @@ dotenv.config();
 import { loadEnv, getEnv } from '../config/env.js';
 import { claimNext, requeueStale } from '../workflows/queue.js';
 import { executeWorkflow, type Step } from '../workflows/executor.js';
+import { transitionRun } from '../workflows/state-machine.js';
 import { db } from '../db/client.js';
-import { workflowRuns } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
 
 // Ensure environment is validated
 loadEnv();
@@ -127,14 +126,17 @@ export function createWorker(options: WorkerOptions = {}) {
           `[Worker ${workerId}] Run ${currentRunId} exceeded grace period. Releasing back to queued.`
         );
         try {
-          await db
-            .update(workflowRuns)
-            .set({
-              status: 'queued',
+          await transitionRun(
+            db,
+            currentRunId,
+            'running',
+            'queued',
+            {
               locked_at: null,
               locked_by: null,
-            })
-            .where(eq(workflowRuns.id, currentRunId));
+            },
+            { workerId }
+          );
         } catch (releaseErr) {
           console.error(`[Worker ${workerId}] Failed to release run ${currentRunId}:`, releaseErr);
         }

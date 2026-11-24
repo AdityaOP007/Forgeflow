@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { workflowRuns, workflowSteps, workflowLogs, services } from '../db/schema.js';
-import { assertRunTransition, assertStepTransition } from './state-machine.js';
+import { transitionRun, transitionStep, LostLockError } from './state-machine.js';
 import { heartbeat } from './queue.js';
 import { redactSecrets } from '../utils/redact.js';
 
@@ -26,6 +26,57 @@ export interface ExecuteOptions {
   steps: Step[];
 }
 
+/**
+ * Save a resource to workflow_runs.resources with workerId lock guard.
+ * Throws LostLockError if the worker does not hold the lock or run is not running.
+ */
+export async function saveWorkflowResource(
+  runId: string,
+  workerId: string,
+  key: string,
+  value: unknown,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx: any = db
+): Promise<Record<string, unknown>> {
+  const run = await tx.query.workflowRuns.findFirst({
+    where: eq(workflowRuns.id, runId),
+  });
+
+  if (!run) {
+    throw new Error(`Workflow run '${runId}' not found`);
+  }
+
+  if (run.locked_by !== workerId || run.status !== 'running') {
+    throw new LostLockError('run', runId, workerId, run.locked_by);
+  }
+
+  const updatedResources: Record<string, unknown> = {
+    ...(run.resources as Record<string, unknown>),
+    [key]: value,
+  };
+
+  const result = await tx
+    .update(workflowRuns)
+    .set({ resources: updatedResources })
+    .where(
+      and(
+        eq(workflowRuns.id, runId),
+        eq(workflowRuns.locked_by, workerId),
+        eq(workflowRuns.status, 'running')
+      )
+    )
+    .returning({ id: workflowRuns.id });
+
+  if (result.length === 0) {
+    const current = await tx.query.workflowRuns.findFirst({
+      where: eq(workflowRuns.id, runId),
+    });
+    throw new LostLockError('run', runId, workerId, current?.locked_by);
+  }
+
+  return updatedResources;
+}
+
 export async function executeWorkflow(options: ExecuteOptions): Promise<void> {
   const { runId, workerId, steps: stepDefinitions } = options;
 
@@ -41,15 +92,41 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<void> {
     throw new Error(`Workflow run '${runId}' not found`);
   }
 
+  // Ensure worker owns the lock initially
+  if (run.locked_by !== workerId || run.status !== 'running') {
+    throw new LostLockError('run', runId, workerId, run.locked_by);
+  }
+
+  let lostLock = false;
+
+  const handleLostLock = async (reason: string) => {
+    if (lostLock) return;
+    lostLock = true;
+    console.warn(`[Worker ${workerId}] ${reason} on run ${runId}. Stopping executor.`);
+    try {
+      await db.insert(workflowLogs).values({
+        workflow_run_id: run.id,
+        level: 'warn',
+        message: `Worker ${workerId} lost lock (${reason}). Execution stopped.`,
+      });
+    } catch {
+      // Ignore log write error if DB is unreachable
+    }
+  };
+
   // Mutable copy of resources for in-memory access and updates
   const resources: Record<string, unknown> = { ...(run.resources as Record<string, unknown>) };
 
   const saveResource = async (key: string, value: unknown) => {
-    resources[key] = value;
-    await db.update(workflowRuns).set({ resources }).where(eq(workflowRuns.id, run.id));
+    if (lostLock) {
+      throw new LostLockError('run', run.id, workerId);
+    }
+    const updated = await saveWorkflowResource(run.id, workerId, key, value);
+    Object.assign(resources, updated);
   };
 
   const writeLog = async (level: 'info' | 'warn' | 'error', message: string, stepKey?: string) => {
+    if (lostLock) return;
     const redacted = redactSecrets(message);
     await db.insert(workflowLogs).values({
       workflow_run_id: run.id,
@@ -63,53 +140,64 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<void> {
 
   // Execute steps in the given order
   for (const stepDef of stepDefinitions) {
+    if (lostLock) {
+      return;
+    }
+
     // Check if cancellation was requested before executing the step
     const freshRun = await db.query.workflowRuns.findFirst({
       where: eq(workflowRuns.id, run.id),
     });
 
-    if (freshRun?.cancel_requested) {
-      assertRunTransition('running', 'cancelled');
+    if (!freshRun || freshRun.locked_by !== workerId || freshRun.status !== 'running') {
+      await handleLostLock('Lost lock before step execution');
+      return;
+    }
 
-      await db.transaction(async (tx) => {
-        // Mark any remaining waiting steps as skipped
-        const remainingSteps = await tx.query.workflowSteps.findMany({
-          where: eq(workflowSteps.workflow_run_id, run.id),
-        });
+    if (freshRun.cancel_requested) {
+      try {
+        await db.transaction(async (tx) => {
+          // Mark any remaining waiting steps as skipped
+          const remainingSteps = await tx.query.workflowSteps.findMany({
+            where: eq(workflowSteps.workflow_run_id, run.id),
+          });
 
-        for (const st of remainingSteps) {
-          if (st.status === 'waiting') {
-            assertStepTransition('waiting', 'skipped');
-            await tx
-              .update(workflowSteps)
-              .set({ status: 'skipped' })
-              .where(eq(workflowSteps.id, st.id));
+          for (const st of remainingSteps) {
+            if (st.status === 'waiting') {
+              await transitionStep(tx, st.id, 'waiting', 'skipped', {}, { workerId });
+            }
           }
-        }
 
-        await tx
-          .update(workflowRuns)
-          .set({
-            status: 'cancelled',
-            completed_at: new Date(),
-            locked_at: null,
-            locked_by: null,
-          })
-          .where(eq(workflowRuns.id, run.id));
+          await transitionRun(
+            tx,
+            run.id,
+            'running',
+            'cancelled',
+            {
+              completed_at: sql`now()`,
+              locked_at: null,
+              locked_by: null,
+            },
+            { workerId }
+          );
 
-        await tx.insert(workflowLogs).values({
-          workflow_run_id: run.id,
-          level: 'info',
-          message: 'Workflow execution cancelled per user request',
+          await tx.insert(workflowLogs).values({
+            workflow_run_id: run.id,
+            level: 'info',
+            message: 'Workflow execution cancelled per user request',
+          });
         });
-      });
+      } catch (cancelErr) {
+        if (cancelErr instanceof LostLockError) {
+          await handleLostLock('Lost lock while cancelling run');
+        }
+      }
 
       return;
     }
 
     const stepRow = stepMap.get(stepDef.key);
     if (!stepRow) {
-      // If no matching DB step row, continue
       continue;
     }
 
@@ -119,22 +207,33 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<void> {
       continue;
     }
 
-    // Step state transition: waiting -> running
-    assertStepTransition(stepRow.status, 'running');
-    await db
-      .update(workflowSteps)
-      .set({
-        status: 'running',
-        started_at: new Date(),
-      })
-      .where(eq(workflowSteps.id, stepRow.id));
+    // Step state transition: waiting -> running with workerId guard
+    try {
+      await transitionStep(
+        db,
+        stepRow.id,
+        'waiting',
+        'running',
+        { started_at: sql`now()` },
+        { workerId }
+      );
+    } catch (stepStartErr) {
+      if (stepStartErr instanceof LostLockError) {
+        await handleLostLock('Lost lock while starting step');
+        return;
+      }
+      throw stepStartErr;
+    }
 
     // Start 15s heartbeat during step execution
     const heartbeatTimer = setInterval(async () => {
       try {
-        await heartbeat(run.id, workerId);
+        const ok = await heartbeat(run.id, workerId);
+        if (!ok) {
+          await handleLostLock('Heartbeat failed');
+        }
       } catch {
-        // Heartbeat failure ignored; executor will continue
+        // Heartbeat failure handled via return boolean
       }
     }, 15000);
 
@@ -150,79 +249,148 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<void> {
     try {
       await stepDef.run(ctx);
 
-      // Step succeeded
-      assertStepTransition('running', 'succeeded');
-      await db
-        .update(workflowSteps)
-        .set({
-          status: 'succeeded',
-          completed_at: new Date(),
-        })
-        .where(eq(workflowSteps.id, stepRow.id));
+      if (lostLock) {
+        return;
+      }
+
+      // Step succeeded with workerId guard
+      await transitionStep(
+        db,
+        stepRow.id,
+        'running',
+        'succeeded',
+        { completed_at: sql`now()` },
+        { workerId }
+      );
 
       stepRow.status = 'succeeded';
     } catch (err: unknown) {
+      if (err instanceof LostLockError || lostLock) {
+        await handleLostLock('Lost lock during step execution');
+        return;
+      }
+
       const rawMessage = err instanceof Error ? err.message : String(err);
       const redacted = redactSecrets(rawMessage).slice(0, 2000);
 
-      // Step failed
-      assertStepTransition('running', 'failed');
-      await db
-        .update(workflowSteps)
-        .set({
-          status: 'failed',
-          completed_at: new Date(),
-          error_summary: redacted,
-        })
-        .where(eq(workflowSteps.id, stepRow.id));
+      try {
+        await db.transaction(async (tx) => {
+          // 1. Step failed with workerId guard
+          await transitionStep(
+            tx,
+            stepRow.id,
+            'running',
+            'failed',
+            {
+              completed_at: sql`now()`,
+              error_summary: redacted,
+            },
+            { workerId }
+          );
 
-      // Run failed
-      assertRunTransition('running', 'failed');
-      await db
-        .update(workflowRuns)
-        .set({
-          status: 'failed',
-          completed_at: new Date(),
-          error_summary: redacted,
-          locked_at: null,
-          locked_by: null,
-        })
-        .where(eq(workflowRuns.id, run.id));
+          // 2. For scaffold runs, mark the service as failed with workerId guard while run is still running & locked
+          if (run.type === 'scaffold' && run.service_id) {
+            const svcRes = await tx
+              .update(services)
+              .set({ provisioning_status: 'failed' })
+              .where(
+                and(
+                  eq(services.id, run.service_id),
+                  sql`EXISTS (SELECT 1 FROM workflow_runs WHERE workflow_runs.id = ${run.id} AND workflow_runs.locked_by = ${workerId} AND workflow_runs.status = 'running')`
+                )
+              )
+              .returning({ id: services.id });
 
-      // For scaffold runs, mark the service as failed
-      if (run.type === 'scaffold' && run.service_id) {
-        await db
-          .update(services)
-          .set({ provisioning_status: 'failed' })
-          .where(eq(services.id, run.service_id));
+            if (svcRes.length === 0) {
+              throw new LostLockError('run', run.id, workerId);
+            }
+          }
+
+          // 3. Run failed with workerId guard (releases lock)
+          await transitionRun(
+            tx,
+            run.id,
+            'running',
+            'failed',
+            {
+              completed_at: sql`now()`,
+              error_summary: redacted,
+              locked_at: null,
+              locked_by: null,
+            },
+            { workerId }
+          );
+
+          await tx.insert(workflowLogs).values({
+            workflow_run_id: run.id,
+            step_key: stepDef.key,
+            level: 'error',
+            message: `Step '${stepDef.name}' failed: ${redacted}`,
+          });
+        });
+      } catch (failErr) {
+        if (failErr instanceof LostLockError) {
+          await handleLostLock('Lost lock while handling failure');
+          return;
+        }
+        throw failErr;
       }
-
-      await writeLog('error', `Step '${stepDef.name}' failed: ${redacted}`, stepDef.key);
       return;
     } finally {
       clearInterval(heartbeatTimer);
     }
   }
 
-  // All steps succeeded
-  assertRunTransition('running', 'succeeded');
-  await db
-    .update(workflowRuns)
-    .set({
-      status: 'succeeded',
-      completed_at: new Date(),
-      locked_at: null,
-      locked_by: null,
-    })
-    .where(eq(workflowRuns.id, run.id));
-
-  // For scaffold runs, mark service as ready
-  if (run.type === 'scaffold' && run.service_id) {
-    await db
-      .update(services)
-      .set({ provisioning_status: 'ready' })
-      .where(eq(services.id, run.service_id));
+  if (lostLock) {
+    return;
   }
 
-  await writeLog('info', 'Workflow run completed successfully');
+  // All steps succeeded
+  try {
+    await db.transaction(async (tx) => {
+      // 1. For scaffold runs, mark service as ready with workerId guard while run is still running & locked
+      if (run.type === 'scaffold' && run.service_id) {
+        const svcRes = await tx
+          .update(services)
+          .set({ provisioning_status: 'ready' })
+          .where(
+            and(
+              eq(services.id, run.service_id),
+              sql`EXISTS (SELECT 1 FROM workflow_runs WHERE workflow_runs.id = ${run.id} AND workflow_runs.locked_by = ${workerId} AND workflow_runs.status = 'running')`
+            )
+          )
+          .returning({ id: services.id });
+
+        if (svcRes.length === 0) {
+          throw new LostLockError('run', run.id, workerId);
+        }
+      }
+
+      // 2. Run succeeded with workerId guard (releases lock)
+      await transitionRun(
+        tx,
+        run.id,
+        'running',
+        'succeeded',
+        {
+          completed_at: sql`now()`,
+          locked_at: null,
+          locked_by: null,
+        },
+        { workerId }
+      );
+
+      await tx.insert(workflowLogs).values({
+        workflow_run_id: run.id,
+        level: 'info',
+        message: 'Workflow run completed successfully',
+      });
+    });
+  } catch (succErr) {
+    if (succErr instanceof LostLockError) {
+      await handleLostLock('Lost lock while completing workflow');
+      return;
+    }
+    throw succErr;
+  }
 }

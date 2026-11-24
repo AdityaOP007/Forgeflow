@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { db } from '../src/db/client.js';
 import { services, workflowRuns, workflowSteps, workflowLogs } from '../src/db/schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { testUsers } from './setup.js';
 import {
   WORKFLOW_RUN_TRANSITIONS,
@@ -10,7 +10,12 @@ import {
   canTransitionStep,
   assertRunTransition,
   assertStepTransition,
+  transitionRun,
+  transitionStep,
   InvalidStateTransitionError,
+  TransitionConflictError,
+  LostLockError,
+  WorkflowTerminalError,
 } from '../src/workflows/state-machine.js';
 import {
   enqueue,
@@ -20,7 +25,7 @@ import {
   requestCancel,
   retry,
 } from '../src/workflows/queue.js';
-import { executeWorkflow, type Step } from '../src/workflows/executor.js';
+import { executeWorkflow, saveWorkflowResource, type Step } from '../src/workflows/executor.js';
 import { redactSecrets } from '../src/utils/redact.js';
 
 describe('Workflow Engine — Checkpoint 2A', () => {
@@ -105,6 +110,33 @@ describe('Workflow Engine — Checkpoint 2A', () => {
       );
       expect(() => assertStepTransition('skipped', 'running')).toThrow(InvalidStateTransitionError);
     });
+
+    it('transitionRun throws TransitionConflictError on compare-and-set status mismatch', async () => {
+      const { run } = await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [{ key: 'step_1', name: 'Step 1' }],
+      });
+
+      // Status in DB is 'queued'; trying to transition from 'running' -> 'succeeded' fails CAS
+      await expect(transitionRun(db, run.id, 'running', 'succeeded')).rejects.toThrow(
+        TransitionConflictError
+      );
+    });
+
+    it('transitionStep throws TransitionConflictError on compare-and-set status mismatch', async () => {
+      const { steps } = await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [{ key: 'step_1', name: 'Step 1' }],
+      });
+
+      const step1 = steps[0];
+      // Status in DB is 'waiting'; trying to transition from 'running' -> 'succeeded' fails CAS
+      await expect(transitionStep(db, step1.id, 'running', 'succeeded')).rejects.toThrow(
+        TransitionConflictError
+      );
+    });
   });
 
   // ─── 2. Queue & Concurrency ─────────────────────────────────────────
@@ -187,19 +219,36 @@ describe('Workflow Engine — Checkpoint 2A', () => {
       const step1 = steps.find((s) => s.key === 'step_1')!;
       const step2 = steps.find((s) => s.key === 'step_2')!;
 
-      await db
-        .update(workflowSteps)
-        .set({ status: 'succeeded', completed_at: new Date() })
-        .where(eq(workflowSteps.id, step1.id));
-
-      await db
-        .update(workflowSteps)
-        .set({ status: 'running', started_at: new Date() })
-        .where(eq(workflowSteps.id, step2.id));
+      await transitionStep(
+        db,
+        step1.id,
+        'waiting',
+        'running',
+        { started_at: sql`now()` },
+        { workerId: 'worker-alpha' }
+      );
+      await transitionStep(
+        db,
+        step1.id,
+        'running',
+        'succeeded',
+        { completed_at: sql`now()` },
+        { workerId: 'worker-alpha' }
+      );
+      await transitionStep(
+        db,
+        step2.id,
+        'waiting',
+        'running',
+        { started_at: sql`now()` },
+        { workerId: 'worker-alpha' }
+      );
 
       // Simulate worker crash by backdating locked_at to 150 seconds ago (older than 120s stale threshold)
-      const past = new Date(Date.now() - 150000);
-      await db.update(workflowRuns).set({ locked_at: past }).where(eq(workflowRuns.id, run.id));
+      await db
+        .update(workflowRuns)
+        .set({ locked_at: sql`now() - interval '150 seconds'` })
+        .where(eq(workflowRuns.id, run.id));
 
       // Recover stale runs
       const recovered = await requeueStale(120000);
@@ -289,10 +338,9 @@ describe('Workflow Engine — Checkpoint 2A', () => {
       await claimNext('worker-heartbeat');
 
       // Set locked_at to 110 seconds ago
-      const nearStale = new Date(Date.now() - 110000);
       await db
         .update(workflowRuns)
-        .set({ locked_at: nearStale })
+        .set({ locked_at: sql`now() - interval '110 seconds'` })
         .where(eq(workflowRuns.id, run.id));
 
       // Beat the heart to refresh locked_at
@@ -595,6 +643,343 @@ describe('Workflow Engine — Checkpoint 2A', () => {
       const res = finalRun?.resources as Record<string, unknown>;
       expect(res.repoUrl).toBe('https://github.com/org/repo');
       expect(res.commitSha).toBe('abcdef123456');
+    });
+
+    // ─── Hardening Requirements (a, b, c, d) ──────────────────────────
+
+    // (a) run 50 iterations of cancel and claim started concurrently
+    it('concurrent cancel and claim across 50 iterations upholds invariant', async () => {
+      for (let i = 0; i < 50; i++) {
+        const { run } = await enqueue({
+          serviceId: testServiceId,
+          type: 'scaffold',
+          steps: [
+            { key: 'step_1', name: 'Step 1' },
+            { key: 'step_2', name: 'Step 2' },
+          ],
+        });
+
+        const workerId = `worker-race-${i}`;
+        let workerClaimed = false;
+
+        const workerPromise = (async () => {
+          const claimed = await claimNext(workerId);
+          if (claimed && claimed.id === run.id) {
+            workerClaimed = true;
+            await executeWorkflow({
+              runId: run.id,
+              workerId,
+              steps: [
+                {
+                  key: 'step_1',
+                  name: 'Step 1',
+                  run: async () => {
+                    await new Promise((r) => setTimeout(r, 2));
+                  },
+                },
+                {
+                  key: 'step_2',
+                  name: 'Step 2',
+                  run: async () => {
+                    await new Promise((r) => setTimeout(r, 2));
+                  },
+                },
+              ],
+            });
+          }
+        })();
+
+        const cancelPromise = requestCancel(run.id);
+
+        await Promise.all([workerPromise, cancelPromise]);
+
+        const finalRun = await db.query.workflowRuns.findFirst({
+          where: eq(workflowRuns.id, run.id),
+          with: { steps: true },
+        });
+
+        // Invariant: The run must end up cancelled and lock released
+        expect(finalRun?.status).toBe('cancelled');
+        expect(finalRun?.locked_by).toBeNull();
+
+        if (!workerClaimed) {
+          // Cancelled before worker claimed it
+          expect(finalRun?.steps.every((s) => s.status === 'skipped')).toBe(true);
+        } else {
+          // Worker claimed it: cancel_requested was set, and executor stopped it before completing all steps
+          const step1 = finalRun?.steps.find((s) => s.key === 'step_1');
+          const step2 = finalRun?.steps.find((s) => s.key === 'step_2');
+          expect(['skipped', 'succeeded']).toContain(step1?.status);
+          expect(step2?.status).toBe('skipped');
+        }
+      }
+    });
+
+    // (b) zombie worker: A claims, its lock goes stale, requeueStale recovers it, B claims;
+    // then A tries to mark step succeeded, run succeeded, saveResource -> all rejected with LostLockError,
+    // B's run status, step statuses and resources are unchanged; A's heartbeat returns false
+    it('zombie worker: A claims, its lock goes stale, requeueStale recovers it, B claims; A operations rejected with LostLockError', async () => {
+      const { run, steps } = await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [
+          { key: 'step_1', name: 'Step 1' },
+          { key: 'step_2', name: 'Step 2' },
+        ],
+      });
+
+      // Worker A claims the run
+      const claimedA = await claimNext('worker-A');
+      expect(claimedA?.id).toBe(run.id);
+      expect(claimedA?.locked_by).toBe('worker-A');
+
+      const step1 = steps[0];
+      const step2 = steps[1];
+
+      await transitionStep(
+        db,
+        step1.id,
+        'waiting',
+        'running',
+        { started_at: sql`now()` },
+        { workerId: 'worker-A' }
+      );
+
+      // Worker A's lock goes stale (simulate crash using database clock)
+      await db
+        .update(workflowRuns)
+        .set({ locked_at: sql`now() - interval '300 seconds'` })
+        .where(eq(workflowRuns.id, run.id));
+
+      // requeueStale recovers it
+      const recovered = await requeueStale(60000);
+      expect(recovered).toBe(1);
+
+      // Worker B claims it
+      const claimedB = await claimNext('worker-B');
+      expect(claimedB?.id).toBe(run.id);
+      expect(claimedB?.locked_by).toBe('worker-B');
+
+      // Worker B starts step 1 and saves a resource
+      await transitionStep(
+        db,
+        step1.id,
+        'waiting',
+        'running',
+        { started_at: sql`now()` },
+        { workerId: 'worker-B' }
+      );
+      await saveWorkflowResource(run.id, 'worker-B', 'b_resource', 'b_value');
+
+      // Now zombie worker A tries:
+      // 1. A's step transition rejected
+      await expect(
+        transitionStep(
+          db,
+          step1.id,
+          'running',
+          'succeeded',
+          { completed_at: sql`now()` },
+          { workerId: 'worker-A' }
+        )
+      ).rejects.toThrow(LostLockError);
+
+      await expect(
+        transitionStep(
+          db,
+          step2.id,
+          'waiting',
+          'running',
+          { started_at: sql`now()` },
+          { workerId: 'worker-A' }
+        )
+      ).rejects.toThrow(LostLockError);
+
+      // 2. A's run success rejected
+      await expect(
+        transitionRun(
+          db,
+          run.id,
+          'running',
+          'succeeded',
+          { completed_at: sql`now()` },
+          { workerId: 'worker-A' }
+        )
+      ).rejects.toThrow(LostLockError);
+
+      // 3. A's saveResource rejected
+      await expect(
+        saveWorkflowResource(run.id, 'worker-A', 'zombie_key', 'zombie_val')
+      ).rejects.toThrow(LostLockError);
+
+      // 4. A's heartbeat returns false
+      const hbA = await heartbeat(run.id, 'worker-A');
+      expect(hbA).toBe(false);
+
+      // 5. B's run status, step statuses and resources are unchanged afterwards
+      const finalRunB = await db.query.workflowRuns.findFirst({
+        where: eq(workflowRuns.id, run.id),
+        with: { steps: true },
+      });
+      expect(finalRunB?.status).toBe('running');
+      expect(finalRunB?.locked_by).toBe('worker-B');
+      expect(finalRunB?.resources).toEqual({ b_resource: 'b_value' });
+
+      const bStep1 = finalRunB?.steps.find((s) => s.key === 'step_1');
+      const bStep2 = finalRunB?.steps.find((s) => s.key === 'step_2');
+      expect(bStep1?.status).toBe('running');
+      expect(bStep2?.status).toBe('waiting');
+    });
+
+    // (c) stale recovery asserts the warn log row exists
+    it('stale recovery asserts the warn log row exists', async () => {
+      const { run } = await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [{ key: 'step_1', name: 'Step 1' }],
+      });
+
+      await claimNext('worker-to-stale');
+
+      await db
+        .update(workflowRuns)
+        .set({ locked_at: sql`now() - interval '200 seconds'` })
+        .where(eq(workflowRuns.id, run.id));
+
+      const recovered = await requeueStale(60000);
+      expect(recovered).toBe(1);
+
+      const warnLogs = await db.query.workflowLogs.findMany({
+        where: and(eq(workflowLogs.workflow_run_id, run.id), eq(workflowLogs.level, 'warn')),
+      });
+
+      expect(warnLogs.length).toBeGreaterThanOrEqual(1);
+      expect(warnLogs[0].message).toContain('recovered from stale lock');
+    });
+
+    // (d) retry and requeue transitions are guarded (a second concurrent retry changes nothing)
+    it('retry and requeue transitions are guarded (a second concurrent retry changes nothing)', async () => {
+      // 1. Concurrent retry test
+      const { run, steps } = await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [{ key: 'step_1', name: 'Step 1' }],
+      });
+
+      await claimNext('worker-retry-guard');
+      const step1 = steps[0];
+
+      // Fail step and run
+      await transitionStep(
+        db,
+        step1.id,
+        'waiting',
+        'running',
+        {},
+        { workerId: 'worker-retry-guard' }
+      );
+      await transitionStep(
+        db,
+        step1.id,
+        'running',
+        'failed',
+        { error_summary: 'fail' },
+        { workerId: 'worker-retry-guard' }
+      );
+      await transitionRun(
+        db,
+        run.id,
+        'running',
+        'failed',
+        { error_summary: 'fail', locked_at: null, locked_by: null },
+        { workerId: 'worker-retry-guard' }
+      );
+
+      // Two concurrent retries
+      const [res1, res2] = await Promise.allSettled([retry(run.id), retry(run.id)]);
+
+      // Exactly one succeeds, the other fails with TransitionConflictError
+      const fulfilled = [res1, res2].filter((r) => r.status === 'fulfilled');
+      const rejected = [res1, res2].filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(TransitionConflictError);
+
+      const runAfterRetry = await db.query.workflowRuns.findFirst({
+        where: eq(workflowRuns.id, run.id),
+      });
+      expect(runAfterRetry?.status).toBe('queued');
+
+      const retryLogs = await db.query.workflowLogs.findMany({
+        where: and(
+          eq(workflowLogs.workflow_run_id, run.id),
+          eq(workflowLogs.message, 'Workflow retry initiated')
+        ),
+      });
+      expect(retryLogs).toHaveLength(1);
+
+      // 2. Concurrent requeue test
+      await claimNext('worker-requeue-guard');
+      await db
+        .update(workflowRuns)
+        .set({ locked_at: sql`now() - interval '300 seconds'` })
+        .where(eq(workflowRuns.id, run.id));
+
+      const [req1, req2] = await Promise.all([requeueStale(60000), requeueStale(60000)]);
+      expect(req1 + req2).toBe(1);
+
+      const runAfterRequeue = await db.query.workflowRuns.findFirst({
+        where: eq(workflowRuns.id, run.id),
+      });
+      expect(runAfterRequeue?.status).toBe('queued');
+      expect(runAfterRequeue?.locked_by).toBeNull();
+    });
+
+    it('heartbeat refreshes locked_at using the database clock (sql`now()`)', async () => {
+      const { run } = await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [{ key: 'step_1', name: 'Step 1' }],
+      });
+
+      await claimNext('worker-hb-clock');
+
+      // Backdate locked_at by 1 hour using database interval
+      await db
+        .update(workflowRuns)
+        .set({ locked_at: sql`now() - interval '1 hour'` })
+        .where(eq(workflowRuns.id, run.id));
+
+      const before = await db.query.workflowRuns.findFirst({
+        where: eq(workflowRuns.id, run.id),
+      });
+      expect(before?.locked_at).not.toBeNull();
+
+      // Trigger heartbeat
+      const beatOk = await heartbeat(run.id, 'worker-hb-clock');
+      expect(beatOk).toBe(true);
+
+      // Verify locked_at was updated by comparing directly against PostgreSQL now()
+      const diffQuery = await db.execute(
+        sql`SELECT locked_at, now() AS db_now, ABS(EXTRACT(EPOCH FROM (now() - locked_at))) AS diff_seconds FROM workflow_runs WHERE id = ${run.id}`
+      );
+      const row = diffQuery.rows[0];
+      expect(row).toBeDefined();
+      expect(Number(row.diff_seconds)).toBeLessThan(2);
+    });
+
+    it('requestCancel on terminal runs returns WorkflowTerminalError', async () => {
+      const { run } = await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [{ key: 'step_1', name: 'Step 1' }],
+      });
+
+      // Cancel once -> cancelled (terminal)
+      await requestCancel(run.id);
+
+      // Cancel again -> throws WorkflowTerminalError
+      await expect(requestCancel(run.id)).rejects.toThrow(WorkflowTerminalError);
     });
   });
 

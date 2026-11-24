@@ -1,7 +1,14 @@
-import { eq, and, lt } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { db, pool } from '../db/client.js';
 import { workflowRuns, workflowSteps, workflowLogs, services } from '../db/schema.js';
-import { assertRunTransition, assertStepTransition } from './state-machine.js';
+import {
+  assertRunTransition,
+  transitionRun,
+  transitionStep,
+  TransitionConflictError,
+  LostLockError,
+  WorkflowTerminalError,
+} from './state-machine.js';
 import { getEnv } from '../config/env.js';
 
 export interface EnqueueStepInput {
@@ -90,11 +97,13 @@ export async function claimNext(workerId: string) {
 
 /**
  * Update locked_at timestamp for a running workflow.
+ * Updates locked_at only WHERE id = ? AND locked_by = workerId AND status = 'running'
+ * and returns a boolean.
  */
 export async function heartbeat(runId: string, workerId: string): Promise<boolean> {
   const result = await db
     .update(workflowRuns)
-    .set({ locked_at: new Date() })
+    .set({ locked_at: sql`now()` })
     .where(
       and(
         eq(workflowRuns.id, runId),
@@ -108,187 +117,205 @@ export async function heartbeat(runId: string, workerId: string): Promise<boolea
 }
 
 /**
- * Requeue stale workflow runs:
+ * Requeue stale workflow runs in a single transaction:
  * Stale = status running and locked_at older than WORKER_STALE_MS.
- * Sets the run back to queued, clears the lock, resets running steps to waiting,
- * and writes a warn log line.
+ * Guarded update WHERE id = ? AND status = 'running' AND locked_at < now() - interval.
+ * Running steps go back to waiting through transitionStep.
+ * Writes the warn log row.
  */
 export async function requeueStale(olderThanMs?: number): Promise<number> {
   const env = getEnv();
   const thresholdMs = olderThanMs ?? env.WORKER_STALE_MS;
-  const staleThreshold = new Date(Date.now() - thresholdMs);
 
-  const staleRuns = await db.query.workflowRuns.findMany({
-    where: and(eq(workflowRuns.status, 'running'), lt(workflowRuns.locked_at, staleThreshold)),
-    with: {
-      steps: true,
-    },
-  });
-
-  let recoveredCount = 0;
-
-  for (const run of staleRuns) {
-    assertRunTransition('running', 'queued');
-
-    await db.transaction(async (tx) => {
-      // Requeue the run
-      await tx
-        .update(workflowRuns)
-        .set({
-          status: 'queued',
-          locked_at: null,
-          locked_by: null,
-        })
-        .where(eq(workflowRuns.id, run.id));
-
-      // Reset any steps that were in running state back to waiting
-      for (const step of run.steps) {
-        if (step.status === 'running') {
-          assertStepTransition('running', 'waiting');
-          await tx
-            .update(workflowSteps)
-            .set({
-              status: 'waiting',
-              started_at: null,
-            })
-            .where(eq(workflowSteps.id, step.id));
-        }
-      }
-
-      // Write warning log
-      await tx.insert(workflowLogs).values({
-        workflow_run_id: run.id,
-        level: 'warn',
-        message: `Workflow run was recovered from stale lock (${run.locked_by || 'unknown worker'}) and requeued`,
-      });
+  return await db.transaction(async (tx) => {
+    const staleRuns = await tx.query.workflowRuns.findMany({
+      where: and(
+        eq(workflowRuns.status, 'running'),
+        sql`locked_at < now() - (${thresholdMs} * interval '1 millisecond')`
+      ),
+      with: {
+        steps: true,
+      },
     });
 
-    recoveredCount++;
-  }
+    let recoveredCount = 0;
 
-  return recoveredCount;
+    for (const run of staleRuns) {
+      try {
+        await transitionRun(
+          tx,
+          run.id,
+          'running',
+          'queued',
+          {
+            locked_at: null,
+            locked_by: null,
+          },
+          { staleBefore: thresholdMs }
+        );
+
+        // Running steps go back to waiting through transitionStep
+        for (const step of run.steps) {
+          if (step.status === 'running') {
+            await transitionStep(tx, step.id, 'running', 'waiting', {
+              started_at: null,
+            });
+          }
+        }
+
+        // Write warning log
+        await tx.insert(workflowLogs).values({
+          workflow_run_id: run.id,
+          level: 'warn',
+          message: `Workflow run was recovered from stale lock (${run.locked_by || 'unknown worker'}) and requeued`,
+        });
+
+        recoveredCount++;
+      } catch (err) {
+        if (err instanceof TransitionConflictError || err instanceof LostLockError) {
+          // Another worker heartbeated or claimed; skip cleanly
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    return recoveredCount;
+  });
 }
 
 /**
  * Request cancellation of a workflow run:
- * - If queued: cancelled immediately, waiting steps marked skipped.
- * - If running: sets cancel_requested = true.
- * - If terminal: throws error.
+ * In requestCancel, load the run inside the transaction with FOR UPDATE.
+ * For a queued run, use transitionRun queued -> cancelled; if it changed zero rows
+ * because a worker just claimed it, fall back to setting cancel_requested = true on the running run.
+ * Terminal runs return a typed error the API can map to 409 (WorkflowTerminalError).
  */
 export async function requestCancel(runId: string) {
-  const run = await db.query.workflowRuns.findFirst({
-    where: eq(workflowRuns.id, runId),
-    with: { steps: true },
-  });
+  return await db.transaction(async (tx) => {
+    const result = await tx.execute(
+      sql`SELECT * FROM workflow_runs WHERE id = ${runId} FOR UPDATE`
+    );
+    const run = result.rows[0];
 
-  if (!run) {
-    throw new Error(`Workflow run '${runId}' not found`);
-  }
+    if (!run) {
+      throw new Error(`Workflow run '${runId}' not found`);
+    }
 
-  if (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled') {
-    throw new Error(`Cannot cancel terminal workflow run (status: ${run.status})`);
-  }
+    const currentStatus = run.status as string;
+    if (
+      currentStatus === 'succeeded' ||
+      currentStatus === 'failed' ||
+      currentStatus === 'cancelled'
+    ) {
+      throw new WorkflowTerminalError(runId, currentStatus);
+    }
 
-  if (run.status === 'queued') {
-    assertRunTransition('queued', 'cancelled');
-
-    await db.transaction(async (tx) => {
-      await tx
-        .update(workflowRuns)
-        .set({
-          status: 'cancelled',
-          completed_at: new Date(),
+    if (currentStatus === 'queued') {
+      try {
+        await transitionRun(tx, run.id as string, 'queued', 'cancelled', {
+          completed_at: sql`now()`,
           cancel_requested: true,
-        })
-        .where(eq(workflowRuns.id, run.id));
+          locked_at: null,
+          locked_by: null,
+        });
 
-      for (const step of run.steps) {
-        if (step.status === 'waiting') {
-          assertStepTransition('waiting', 'skipped');
-          await tx
-            .update(workflowSteps)
-            .set({ status: 'skipped' })
-            .where(eq(workflowSteps.id, step.id));
+        const steps = await tx.query.workflowSteps.findMany({
+          where: eq(workflowSteps.workflow_run_id, run.id as string),
+        });
+
+        for (const step of steps) {
+          if (step.status === 'waiting') {
+            await transitionStep(tx, step.id, 'waiting', 'skipped');
+          }
         }
-      }
 
-      await tx.insert(workflowLogs).values({
-        workflow_run_id: run.id,
-        level: 'info',
-        message: 'Workflow cancelled while queued',
-      });
+        await tx.insert(workflowLogs).values({
+          workflow_run_id: run.id as string,
+          level: 'info',
+          message: 'Workflow cancelled while queued',
+        });
+
+        return { cancelled: true, immediate: true };
+      } catch (err) {
+        if (err instanceof TransitionConflictError) {
+          // Worker just claimed it; fall back to setting cancel_requested = true on the running run
+          await tx
+            .update(workflowRuns)
+            .set({ cancel_requested: true })
+            .where(eq(workflowRuns.id, run.id as string));
+
+          await tx.insert(workflowLogs).values({
+            workflow_run_id: run.id as string,
+            level: 'info',
+            message: 'Cancellation requested for running workflow',
+          });
+
+          return { cancelled: false, immediate: false, requested: true };
+        }
+        throw err;
+      }
+    }
+
+    // Running workflow
+    await tx
+      .update(workflowRuns)
+      .set({ cancel_requested: true })
+      .where(eq(workflowRuns.id, run.id as string));
+
+    await tx.insert(workflowLogs).values({
+      workflow_run_id: run.id as string,
+      level: 'info',
+      message: 'Cancellation requested for running workflow',
     });
 
-    return { cancelled: true, immediate: true };
-  }
-
-  // Running workflow
-  await db.update(workflowRuns).set({ cancel_requested: true }).where(eq(workflowRuns.id, run.id));
-
-  await db.insert(workflowLogs).values({
-    workflow_run_id: run.id,
-    level: 'info',
-    message: 'Cancellation requested for running workflow',
+    return { cancelled: false, immediate: false, requested: true };
   });
-
-  return { cancelled: false, immediate: false, requested: true };
 }
 
 /**
  * Retry a failed workflow run:
  * - Only failed runs can be retried.
- * - Resets failed and skipped steps to waiting.
- * - Clears the lock and sets status back to queued.
+ * - Guarded compare-and-set: transitionRun failed -> queued.
+ * - Resets failed steps to waiting through transitionStep.
  * - For scaffold runs, resets service provisioning_status to 'provisioning'.
  */
 export async function retry(runId: string) {
-  const run = await db.query.workflowRuns.findFirst({
-    where: eq(workflowRuns.id, runId),
-    with: { steps: true },
-  });
+  return await db.transaction(async (tx) => {
+    const result = await tx.execute(
+      sql`SELECT * FROM workflow_runs WHERE id = ${runId} FOR UPDATE`
+    );
+    const run = result.rows[0];
 
-  if (!run) {
-    throw new Error(`Workflow run '${runId}' not found`);
-  }
+    if (!run) {
+      throw new Error(`Workflow run '${runId}' not found`);
+    }
 
-  if (run.status !== 'failed') {
-    throw new Error(`Cannot retry workflow run that is not failed (status: ${run.status})`);
-  }
+    if (run.status !== 'failed') {
+      throw new TransitionConflictError('run', runId, 'failed', run.status as string);
+    }
 
-  assertRunTransition('failed', 'queued');
+    // Guarded transition failed -> queued
+    await transitionRun(tx, run.id as string, 'failed', 'queued', {
+      locked_at: null,
+      locked_by: null,
+      completed_at: null,
+      error_summary: null,
+      cancel_requested: false,
+    });
 
-  await db.transaction(async (tx) => {
-    // Reset run
-    await tx
-      .update(workflowRuns)
-      .set({
-        status: 'queued',
-        locked_at: null,
-        locked_by: null,
-        completed_at: null,
-        error_summary: null,
-        cancel_requested: false,
-      })
-      .where(eq(workflowRuns.id, run.id));
+    const steps = await tx.query.workflowSteps.findMany({
+      where: eq(workflowSteps.workflow_run_id, run.id as string),
+    });
 
-    // Reset failed and skipped steps to waiting
-    for (const step of run.steps) {
-      if (step.status === 'failed' || step.status === 'skipped') {
-        if (step.status === 'failed') {
-          assertStepTransition('failed', 'waiting');
-        } else {
-          // skipped -> waiting on retry
-          assertStepTransition('waiting', 'running'); // verification
-        }
-        await tx
-          .update(workflowSteps)
-          .set({
-            status: 'waiting',
-            started_at: null,
-            completed_at: null,
-            error_summary: null,
-          })
-          .where(eq(workflowSteps.id, step.id));
+    // Reset failed steps to waiting through transitionStep
+    for (const step of steps) {
+      if (step.status === 'failed') {
+        await transitionStep(tx, step.id, 'failed', 'waiting', {
+          started_at: null,
+          completed_at: null,
+          error_summary: null,
+        });
       }
     }
 
@@ -297,18 +324,18 @@ export async function retry(runId: string) {
       await tx
         .update(services)
         .set({ provisioning_status: 'provisioning' })
-        .where(eq(services.id, run.service_id));
+        .where(eq(services.id, run.service_id as string));
     }
 
     await tx.insert(workflowLogs).values({
-      workflow_run_id: run.id,
+      workflow_run_id: run.id as string,
       level: 'info',
       message: 'Workflow retry initiated',
     });
-  });
 
-  return db.query.workflowRuns.findFirst({
-    where: eq(workflowRuns.id, runId),
-    with: { steps: true },
+    return await tx.query.workflowRuns.findFirst({
+      where: eq(workflowRuns.id, runId),
+      with: { steps: true },
+    });
   });
 }
