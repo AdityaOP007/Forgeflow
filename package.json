@@ -5,7 +5,7 @@
   "packageManager": "pnpm@12.21.0",
   "scripts": {
     "predev": "node scripts/predev.mjs",
-    "dev": "pnpm db:migrate && pnpm db:seed && pnpm --filter @forgeflow/api --filter @forgeflow/web --parallel dev",
+    "dev": "pnpm db:migrate && pnpm db:seed && concurrently -n api,worker,web -c blue,magenta,green \"pnpm --filter @forgeflow/api dev\" \"pnpm --filter @forgeflow/api dev:worker\" \"pnpm --filter @forgeflow/web dev\"",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "lint": "eslint . && prettier --check .",
@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
+    "concurrently": "10.0.7",
     "eslint": "^9.21.0",
     "eslint-config-prettier": "^10.0.2",
     "prettier": "^3.5.2",

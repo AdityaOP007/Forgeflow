@@ -92,6 +92,22 @@ export const updateServiceSchema = z.object({
 });
 export type UpdateServiceInput = z.infer<typeof updateServiceSchema>;
 
+export const scaffoldServiceSchema = z.object({
+  name: serviceNameSchema,
+  description: z.string().max(300, 'Description must be at most 300 characters').optional(),
+  templateId: z.string().uuid('Must be a valid UUID'),
+  database: z.literal('postgresql').default('postgresql'),
+  repositoryVisibility: z.enum(['private', 'public']).default('private'),
+  environment: z.literal('local-docker').default('local-docker'),
+});
+export type ScaffoldServiceInput = z.infer<typeof scaffoldServiceSchema>;
+
+export interface ScaffoldServiceResponse {
+  serviceId: string;
+  workflowId: string;
+  status: 'queued';
+}
+
 // ─── Query params ────────────────────────────────────────────────────
 export const listServicesQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -121,6 +137,7 @@ export interface DashboardSummary {
   unknownCount: number;
   activeDeployments: number;
   failedBuilds: number;
+  activeWorkflows: number;
 }
 
 // ─── User ────────────────────────────────────────────────────────────
@@ -157,6 +174,9 @@ export interface ServiceListItem {
   repositoryUrl: string | null;
   templateId: string | null;
   templateName: string | null;
+  provisioningStatus: ServiceProvisioningStatus;
+  templateVersion: string | null;
+  latestWorkflowId: string | null;
   health: EnvironmentStatus;
   createdAt: string;
   updatedAt: string;
@@ -233,6 +253,56 @@ export interface PaginatedResponse<T> {
   page: number;
   pageSize: number;
   totalPages: number;
+}
+
+// ─── Workflows API ───────────────────────────────────────────────────
+export const listWorkflowsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  status: WorkflowRunStatus.optional(),
+  serviceId: z.string().uuid().optional(),
+});
+export type ListWorkflowsQuery = z.infer<typeof listWorkflowsQuerySchema>;
+
+export const workflowLogsQuerySchema = z.object({
+  after: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(200),
+});
+export type WorkflowLogsQuery = z.infer<typeof workflowLogsQuerySchema>;
+
+export interface WorkflowListItem {
+  id: string;
+  serviceId: string;
+  serviceName: string;
+  serviceSlug: string;
+  type: string;
+  status: WorkflowRunStatus;
+  attempts: number;
+  cancelRequested: boolean;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  errorSummary: string | null;
+}
+
+export interface WorkflowDetailResponse extends WorkflowRun {
+  serviceName: string;
+  serviceSlug: string;
+  failedStepKey: string | null;
+  steps: WorkflowStep[];
+}
+
+export interface WorkflowLogsResponse {
+  logs: WorkflowLog[];
+  nextCursor: number | null;
+}
+
+// ─── GitHub Integration ──────────────────────────────────────────────
+export interface GitHubIntegrationStatus {
+  configured: boolean;
+  connected: boolean;
+  org: string | null;
+  message: string;
 }
 
 // ─── Slug generation helper ──────────────────────────────────────────

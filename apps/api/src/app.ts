@@ -6,17 +6,24 @@ import { loadEnv } from './config/env.js';
 import { healthRouter } from './routes/health.js';
 import { meRouter } from './modules/me/routes.js';
 import { templatesRouter } from './modules/templates/routes.js';
-import { servicesRouter } from './modules/services/routes.js';
+import { createServicesRouter, type ServicesRouterOptions } from './modules/services/routes.js';
 import { dashboardRouter } from './modules/dashboard/routes.js';
+import {
+  createIntegrationsRouter,
+  type IntegrationsRouterOptions,
+} from './modules/integrations/routes.js';
+import { workflowsRouter } from './modules/workflows/routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import type { AuthVerifier } from './middleware/types.js';
 
 export interface AppOptions {
   auth: AuthVerifier;
   webOrigin?: string;
+  integrations?: IntegrationsRouterOptions;
+  services?: ServicesRouterOptions;
 }
 
-export function createApp({ auth, webOrigin }: AppOptions) {
+export function createApp({ auth, webOrigin, integrations, services }: AppOptions) {
   loadEnv();
   const app = express();
 
@@ -55,8 +62,10 @@ export function createApp({ auth, webOrigin }: AppOptions) {
   apiRouter.use(auth);
   apiRouter.use('/me', meRouter);
   apiRouter.use('/templates', templatesRouter);
-  apiRouter.use('/services', servicesRouter);
+  apiRouter.use('/services', createServicesRouter(services));
+  apiRouter.use('/workflows', workflowsRouter);
   apiRouter.use('/dashboard', dashboardRouter);
+  apiRouter.use('/integrations', createIntegrationsRouter(integrations));
 
   app.use('/api', apiRouter);
 

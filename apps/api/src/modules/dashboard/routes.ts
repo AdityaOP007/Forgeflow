@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { DashboardSummary } from '@forgeflow/shared-types';
 import { db } from '../../db/client.js';
 import { services, environments, workflowRuns } from '../../db/schema.js';
-import { count, eq, and, gte } from 'drizzle-orm';
+import { count, eq, and, gte, inArray } from 'drizzle-orm';
 
 export const dashboardRouter = Router();
 
@@ -54,13 +54,19 @@ dashboardRouter.get(
         .from(workflowRuns)
         .where(eq(workflowRuns.status, 'running'));
 
+      // Active workflows (queued + running)
+      const [{ value: activeWorkflows }] = await db
+        .select({ value: count() })
+        .from(workflowRuns)
+        .where(inArray(workflowRuns.status, ['queued', 'running']));
+
       // Failed builds in last 24h
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const [{ value: failedBuilds }] = await db
         .select({ value: count() })
         .from(workflowRuns)
         .where(
-          and(eq(workflowRuns.status, 'failed'), gte(workflowRuns.started_at, twentyFourHoursAgo))
+          and(eq(workflowRuns.status, 'failed'), gte(workflowRuns.created_at, twentyFourHoursAgo))
         );
 
       res.json({
@@ -70,6 +76,7 @@ dashboardRouter.get(
         unknownCount,
         activeDeployments: Number(activeDeployments),
         failedBuilds: Number(failedBuilds),
+        activeWorkflows: Number(activeWorkflows),
       });
     } catch (err) {
       next(err);

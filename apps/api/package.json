@@ -15,10 +15,14 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:studio": "drizzle-kit studio",
     "db:reset": "tsx src/db/reset.ts",
-    "verify:template": "tsx scripts/verify-template.ts"
+    "verify:template": "tsx scripts/verify-template.ts",
+    "github:check": "tsx scripts/github-check.ts",
+    "github:smoke": "tsx scripts/github-smoke.ts"
   },
   "dependencies": {
     "@forgeflow/shared-types": "workspace:*",
+    "@octokit/auth-app": "8.3.1",
+    "@octokit/rest": "22.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.45.4",

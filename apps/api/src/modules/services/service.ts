@@ -11,13 +11,20 @@ import { eq, sql, ilike, and, desc, asc, count, inArray } from 'drizzle-orm';
 import type {
   CreateServiceInput,
   UpdateServiceInput,
+  ScaffoldServiceInput,
+  ScaffoldServiceResponse,
   ListServicesQuery,
   ServiceListItem,
   ServiceDetail,
+  ServiceProvisioningStatus,
   EnvironmentStatus,
   PaginatedResponse,
 } from '@forgeflow/shared-types';
 import { generateSlug } from '@forgeflow/shared-types';
+import { getGitHubConfig } from '../../config/env.js';
+import { isTemplateAvailable } from '../../templates/registry.js';
+import { enqueue } from '../../workflows/queue.js';
+import { SCAFFOLD_STEP_DEFINITIONS } from '../../workflows/steps/scaffold.js';
 
 // ─── Aggregate health from environments ──────────────────────────────
 function aggregateHealth(envStatuses: EnvironmentStatus[]): EnvironmentStatus {
@@ -66,6 +73,8 @@ export async function listServices(
       repository_url: services.repository_url,
       template_id: services.template_id,
       template_name: templates.name,
+      provisioning_status: services.provisioning_status,
+      template_version: services.template_version,
       created_at: services.created_at,
       updated_at: services.updated_at,
     })
@@ -77,9 +86,10 @@ export async function listServices(
     .limit(pageSize)
     .offset(offset);
 
-  // Get environments for all returned services to compute health
+  // Get environments and latest workflow run for all returned services
   const serviceIds = rows.map((r) => r.id);
   let envRows: { service_id: string; status: EnvironmentStatus }[] = [];
+  const latestWorkflowByService = new Map<string, string>();
   if (serviceIds.length > 0) {
     envRows = (await db
       .select({ service_id: environments.service_id, status: environments.status })
@@ -88,6 +98,17 @@ export async function listServices(
       service_id: string;
       status: EnvironmentStatus;
     }[];
+
+    const wfRows = await db
+      .select({ id: workflowRuns.id, service_id: workflowRuns.service_id })
+      .from(workflowRuns)
+      .where(inArray(workflowRuns.service_id, serviceIds))
+      .orderBy(desc(workflowRuns.created_at));
+    for (const w of wfRows) {
+      if (!latestWorkflowByService.has(w.service_id)) {
+        latestWorkflowByService.set(w.service_id, w.id);
+      }
+    }
   }
 
   // Group env statuses by service
@@ -108,6 +129,9 @@ export async function listServices(
     repositoryUrl: r.repository_url,
     templateId: r.template_id,
     templateName: r.template_name,
+    provisioningStatus: r.provisioning_status as ServiceProvisioningStatus,
+    templateVersion: r.template_version,
+    latestWorkflowId: latestWorkflowByService.get(r.id) ?? null,
     health: aggregateHealth(envByService.get(r.id) || []),
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
@@ -140,6 +164,8 @@ export async function getServiceById(id: string): Promise<ServiceDetail | null> 
       repository_url: services.repository_url,
       template_id: services.template_id,
       template_name: templates.name,
+      provisioning_status: services.provisioning_status,
+      template_version: services.template_version,
       created_at: services.created_at,
       updated_at: services.updated_at,
     })
@@ -156,12 +182,12 @@ export async function getServiceById(id: string): Promise<ServiceDetail | null> 
   // Get environments
   const envs = await db.select().from(environments).where(eq(environments.service_id, id));
 
-  // Get recent workflow runs (last 20)
+  // Get recent workflow runs (last 20, newest first)
   const runs = await db
     .select()
     .from(workflowRuns)
     .where(eq(workflowRuns.service_id, id))
-    .orderBy(desc(workflowRuns.started_at))
+    .orderBy(desc(workflowRuns.created_at))
     .limit(20);
 
   const envStatuses = envs.map((e) => e.status as EnvironmentStatus);
@@ -176,6 +202,9 @@ export async function getServiceById(id: string): Promise<ServiceDetail | null> 
     repositoryUrl: r.repository_url,
     templateId: r.template_id,
     templateName: r.template_name,
+    provisioningStatus: r.provisioning_status as ServiceProvisioningStatus,
+    templateVersion: r.template_version,
+    latestWorkflowId: runs[0]?.id ?? null,
     health: aggregateHealth(envStatuses),
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
@@ -274,8 +303,134 @@ export async function updateService(
   return getServiceById(updated.id);
 }
 
+// ─── Scaffold service (async workflow) ───────────────────────────────
+export async function scaffoldService(
+  input: ScaffoldServiceInput,
+  ownerId: string,
+  isGitHubConfigured: () => boolean = () => getGitHubConfig().configured
+): Promise<ScaffoldServiceResponse> {
+  if (!isGitHubConfigured()) {
+    const err = new Error(
+      'GitHub App integration is not configured. See docs/github-app-setup.md to configure credentials.'
+    ) as Error & { statusCode: number; code: string };
+    err.statusCode = 503;
+    err.code = 'GITHUB_NOT_CONFIGURED';
+    throw err;
+  }
+
+  const [tpl] = await db
+    .select()
+    .from(templates)
+    .where(eq(templates.id, input.templateId))
+    .limit(1);
+
+  if (!tpl || !isTemplateAvailable(tpl.slug)) {
+    const err = new Error('Selected template is not available') as Error & {
+      statusCode: number;
+      code: string;
+    };
+    err.statusCode = 422;
+    err.code = 'TEMPLATE_UNAVAILABLE';
+    throw err;
+  }
+
+  const slug = generateSlug(input.name);
+
+  return db.transaction(async (tx) => {
+    // Limit active workflows per user (3 queued or running)
+    const [{ value: activeCount }] = await tx
+      .select({ value: count() })
+      .from(workflowRuns)
+      .where(
+        and(
+          eq(workflowRuns.created_by, ownerId),
+          inArray(workflowRuns.status, ['queued', 'running'])
+        )
+      );
+
+    if (Number(activeCount) >= 3) {
+      const err = new Error(
+        'Too many active workflows: you already have 3 workflows queued or running'
+      ) as Error & { statusCode: number; code: string };
+      err.statusCode = 429;
+      err.code = 'TOO_MANY_ACTIVE_WORKFLOWS';
+      throw err;
+    }
+
+    // Check slug uniqueness
+    const existing = await tx
+      .select({ id: services.id })
+      .from(services)
+      .where(eq(services.slug, slug))
+      .limit(1);
+
+    if (existing.length > 0) {
+      const err = new Error(`Service with slug '${slug}' already exists`) as Error & {
+        statusCode: number;
+        code: string;
+      };
+      err.statusCode = 409;
+      err.code = 'CONFLICT';
+      throw err;
+    }
+
+    const [createdService] = await tx
+      .insert(services)
+      .values({
+        name: input.name,
+        slug,
+        description: input.description || null,
+        owner_id: ownerId,
+        template_id: tpl.id,
+        provisioning_status: 'provisioning',
+      })
+      .returning();
+
+    const { run } = await enqueue(
+      {
+        serviceId: createdService.id,
+        type: 'scaffold',
+        input: input as unknown as Record<string, unknown>,
+        createdBy: ownerId,
+        steps: [...SCAFFOLD_STEP_DEFINITIONS],
+      },
+      tx
+    );
+
+    await tx.insert(auditLogs).values({
+      actor_id: ownerId,
+      action: 'service.scaffold.requested',
+      resource_type: 'service',
+      resource_id: createdService.id,
+    });
+
+    return {
+      serviceId: createdService.id,
+      workflowId: run.id,
+      status: 'queued',
+    };
+  });
+}
+
 // ─── Delete service ──────────────────────────────────────────────────
 export async function deleteService(id: string): Promise<boolean> {
+  const activeRuns = await db
+    .select({ id: workflowRuns.id })
+    .from(workflowRuns)
+    .where(
+      and(eq(workflowRuns.service_id, id), inArray(workflowRuns.status, ['queued', 'running']))
+    )
+    .limit(1);
+
+  if (activeRuns.length > 0) {
+    const err = new Error(
+      'Cannot delete service while a workflow is queued or running'
+    ) as Error & { statusCode: number; code: string };
+    err.statusCode = 409;
+    err.code = 'WORKFLOW_IN_PROGRESS';
+    throw err;
+  }
+
   const result = await db
     .delete(services)
     .where(eq(services.id, id))

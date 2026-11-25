@@ -215,6 +215,9 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
       'repositoryUrl',
       'templateId',
       'templateName',
+      'provisioningStatus',
+      'templateVersion',
+      'latestWorkflowId',
       'health',
       'createdAt',
       'updatedAt',
@@ -230,6 +233,9 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
       'repositoryUrl',
       'templateId',
       'templateName',
+      'provisioningStatus',
+      'templateVersion',
+      'latestWorkflowId',
       'health',
       'createdAt',
       'updatedAt',
@@ -526,6 +532,7 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
         unknownCount: 0,
         activeDeployments: 0,
         failedBuilds: 0,
+        activeWorkflows: 0,
       });
     });
 
@@ -594,6 +601,7 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
         unknownCount: 0,
         activeDeployments: 1,
         failedBuilds: 1,
+        activeWorkflows: 1,
       });
     });
   });

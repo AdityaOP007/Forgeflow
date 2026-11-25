@@ -1,5 +1,12 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '../../../');
+const envPath = path.join(repoRoot, 'apps/api/.env');
+dotenv.config({ path: envPath, override: true });
+console.log(`Loaded env from ${envPath}`);
 
 import { loadEnv } from './config/env.js';
 import { createApp } from './app.js';

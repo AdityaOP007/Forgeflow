@@ -1,10 +1,19 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-dotenv.config();
 
-import { loadEnv, getEnv } from '../config/env.js';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '../../../../');
+const envPath = path.join(repoRoot, 'apps/api/.env');
+dotenv.config({ path: envPath, override: true });
+console.log(`Loaded env from ${envPath}`);
+
+import { loadEnv, getEnv, getGitHubConfig } from '../config/env.js';
 import { claimNext, requeueStale } from '../workflows/queue.js';
 import { executeWorkflow, type Step } from '../workflows/executor.js';
 import { transitionRun } from '../workflows/state-machine.js';
+import { createScaffoldSteps } from '../workflows/steps/scaffold.js';
+import { RealGitHubClient } from '../github/client.js';
 import { db } from '../db/client.js';
 
 // Ensure environment is validated
@@ -18,6 +27,22 @@ const defaultStepRegistry = new Map<string, Step[]>();
 export function registerWorkflowSteps(type: string, steps: Step[]): void {
   defaultStepRegistry.set(type, steps);
 }
+
+// Register default scaffold workflow steps (uses real GitHubClient from env)
+registerWorkflowSteps(
+  'scaffold',
+  createScaffoldSteps({
+    getGitHubClient: () => {
+      const cfg = getGitHubConfig();
+      if (!cfg.configured || !cfg.config) return null;
+      return new RealGitHubClient(cfg.config);
+    },
+    getGitHubOrg: () => {
+      const cfg = getGitHubConfig();
+      return cfg.config?.org ?? null;
+    },
+  })
+);
 
 export interface WorkerOptions {
   workerId?: string;

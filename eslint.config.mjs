@@ -22,5 +22,21 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
     },
+  },
+  {
+    files: ['apps/api/src/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['*fake-github-client*', '**/test/**'],
+              message: 'Production code must not import test utilities or FakeGitHubClient.',
+            },
+          ],
+        },
+      ],
+    },
   }
 );
