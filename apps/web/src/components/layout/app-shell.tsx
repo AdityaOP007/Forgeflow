@@ -10,6 +10,7 @@ import {
   Settings,
   Terminal,
   ChevronRight,
+  GitBranch,
 } from 'lucide-react';
 import { useAppAuth } from '../../context/auth-context';
 import { Badge } from '../ui/badge';
@@ -31,6 +32,7 @@ export function AppShell() {
         let label = segment.charAt(0).toUpperCase() + segment.slice(1);
         if (segment === 'services') label = 'Catalog';
         if (segment === 'new') label = 'New Service';
+        if (segment === 'workflows') label = 'Workflows';
         return { label, path };
       }),
   ];
@@ -87,6 +89,11 @@ export function AppShell() {
             <div className="text-[10px] uppercase font-semibold text-slate-500 px-3 pt-4 pb-1 tracking-wider">
               Operations
             </div>
+            <NavLink to="/workflows" className={navLinkClasses}>
+              <GitBranch className="h-4 w-4" />
+              <span>Workflows</span>
+            </NavLink>
+
             <NavLink to="/deployments" className={navLinkClasses}>
               <Rocket className="h-4 w-4" />
               <span>Deployments</span>

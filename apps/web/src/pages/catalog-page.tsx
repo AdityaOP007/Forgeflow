@@ -18,7 +18,8 @@ import {
 } from '../components/ui/table';
 import { Card } from '../components/ui/card';
 import { Skeleton } from '../components/ui/skeleton';
-import type { EnvironmentStatus } from '@forgeflow/shared-types';
+import { isSafeHttpsUrl } from '../lib/utils';
+import type { EnvironmentStatus, ServiceProvisioningStatus } from '@forgeflow/shared-types';
 
 export function CatalogPage() {
   const { role } = useAppAuth();
@@ -45,6 +46,29 @@ export function CatalogPage() {
         order: 'desc',
       }),
   });
+
+  const getProvisioningBadge = (status: ServiceProvisioningStatus) => {
+    switch (status) {
+      case 'ready':
+        return (
+          <Badge variant="healthy" className="capitalize">
+            Ready
+          </Badge>
+        );
+      case 'failed':
+        return (
+          <Badge variant="failed" className="capitalize">
+            Failed
+          </Badge>
+        );
+      default:
+        return (
+          <Badge variant="degraded" className="capitalize">
+            Provisioning
+          </Badge>
+        );
+    }
+  };
 
   const getHealthBadge = (health: EnvironmentStatus) => {
     switch (health) {
@@ -143,6 +167,7 @@ export function CatalogPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Service</TableHead>
+                <TableHead>Provisioning</TableHead>
                 <TableHead>Health</TableHead>
                 <TableHead>Owner</TableHead>
                 <TableHead>Template</TableHead>
@@ -166,6 +191,8 @@ export function CatalogPage() {
                     </div>
                   </TableCell>
 
+                  <TableCell>{getProvisioningBadge(svc.provisioningStatus)}</TableCell>
+
                   <TableCell>{getHealthBadge(svc.health)}</TableCell>
 
                   <TableCell className="text-slate-300">{svc.ownerName || 'Unassigned'}</TableCell>
@@ -181,11 +208,11 @@ export function CatalogPage() {
                   </TableCell>
 
                   <TableCell>
-                    {svc.repositoryUrl ? (
+                    {isSafeHttpsUrl(svc.repositoryUrl) ? (
                       <a
                         href={svc.repositoryUrl}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
                         className="inline-flex items-center space-x-1 text-xs text-indigo-400 hover:text-indigo-300 hover:underline"
                       >

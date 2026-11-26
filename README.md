@@ -4,7 +4,9 @@ ForgeFlow is an Internal Developer Platform (IDP) web portal that empowers engin
 
 ## Current Status
 
-> **Phase 1 (Foundation and Service Catalog)**: Complete foundation featuring PostgreSQL persistence with Drizzle ORM, local admin mode with server-side RBAC (`admin`, `developer`, `viewer`), service catalog CRUD, architecture templates, dashboard overview, and comprehensive API testing.
+> **Phase 2 (Service Scaffolding, Workflow Engine & GitHub App Integration)**: Asynchronous workflow queue and worker, template rendering engine (`python-fastapi`), GitHub App integration (`createRepository` + Git Data API commit), 5-step service scaffolding wizard, real-time workflow progress and log streaming, and retry/cancellation controls.
+>
+> **Phase 1 (Foundation and Service Catalog)**: PostgreSQL persistence with Drizzle ORM, local admin mode with server-side RBAC (`admin`, `developer`, `viewer`), service catalog CRUD, architecture templates, dashboard overview, and comprehensive API testing.
 >
 > **Note on Authentication**: The platform currently runs in **local development mode** as a single built-in local admin user (`admin@forgeflow.local`, role: `admin`), bypassing sign-in requirements. Full Clerk authentication has been safely preserved in git tag `phase-1-clerk` and will be reintroduced in a later phase alongside an enterprise SSO provider option.
 
@@ -59,7 +61,7 @@ pnpm dev
 
 1. **Predev Step**: Verifies Docker is running and starts PostgreSQL (`docker compose up -d --wait postgres`).
 2. **Migrations & Seed**: Runs schema migrations (`pnpm db:migrate`) and seeds reference service templates (`pnpm db:seed`).
-3. **Application Servers**: Starts the backend API (`http://127.0.0.1:4000`) and Vite web portal (`http://localhost:5173`) in parallel.
+3. **Application Servers**: Starts the backend API (`http://127.0.0.1:4000`), the background workflow worker (`dev:worker`), and the Vite web portal (`http://localhost:5173`) in parallel.
 4. **Browser Launch**: Automatically opens your browser directly to `/dashboard`.
 
 > **Note on Individual Scripts**:
@@ -68,7 +70,28 @@ pnpm dev
 > - `pnpm db:migrate` — Run pending database migrations
 > - `pnpm db:seed` — Idempotently seed reference templates
 > - `pnpm --filter @forgeflow/api dev` — Run API server only
+> - `pnpm --filter @forgeflow/api dev:worker` — Run background workflow worker only
 > - `pnpm --filter @forgeflow/web dev` — Run Web portal only
+> - `pnpm --filter @forgeflow/api github:check` — Verify GitHub App configuration and installation permissions
+> - `pnpm --filter @forgeflow/api github:smoke` — Run end-to-end GitHub App repository create/commit/delete smoke test
+> - `pnpm --filter @forgeflow/api verify:template` — Render and test `templates/fastapi-service` inside `python:3.12-slim` and Docker Compose
+
+### 5. Phase 2 GitHub App Setup & Environment Variables
+
+To enable real GitHub repository scaffolding (`POST /api/services/scaffold` and the 5-step Create Service wizard):
+
+1. Follow [`docs/github-app-setup.md`](docs/github-app-setup.md) to create a GitHub App, install it on your organization, and save the `.pem` private key under `./secrets/` (gitignored).
+2. Configure the Phase 2 variables in `apps/api/.env`:
+
+```bash
+GITHUB_APP_ID=<your-app-id>
+GITHUB_APP_INSTALLATION_ID=<your-installation-id>
+GITHUB_APP_PRIVATE_KEY_PATH=./secrets/github-app.pem
+GITHUB_ORG=<your-github-org-login>
+WORKER_POLL_MS=1000
+```
+
+3. Verify connectivity with `pnpm --filter @forgeflow/api github:check`.
 
 ---
 

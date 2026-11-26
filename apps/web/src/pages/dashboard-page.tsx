@@ -12,7 +12,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useAppAuth } from '../context/auth-context';
-import { fetchDashboardSummary } from '../lib/api-client';
+import { fetchDashboardSummary, fetchGitHubIntegration, fetchServices } from '../lib/api-client';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
@@ -29,6 +29,16 @@ export function DashboardPage() {
   } = useQuery({
     queryKey: ['dashboardSummary'],
     queryFn: () => fetchDashboardSummary(),
+  });
+
+  const { data: githubStatus } = useQuery({
+    queryKey: ['githubIntegration'],
+    queryFn: () => fetchGitHubIntegration(),
+  });
+
+  const { data: servicesData } = useQuery({
+    queryKey: ['services', 'checklist'],
+    queryFn: () => fetchServices({ pageSize: 100 }),
   });
 
   if (isLoading) {
@@ -67,16 +77,26 @@ export function DashboardPage() {
   }
 
   // Get Started checklist computed dynamically from real data (no saved flags)
+  const hasReadyService = Boolean(
+    servicesData?.data.some((svc) => svc.provisioningStatus === 'ready')
+  );
   const checklist = [
     {
+      title: 'Connect GitHub',
+      description: githubStatus?.connected
+        ? `Connected to GitHub organization ${githubStatus.org}`
+        : 'Configure GitHub App credentials to enable repository scaffolding',
+      done: Boolean(githubStatus?.connected),
+    },
+    {
       title: 'Provision your first service',
-      description: 'Create a microservice from a standardized architecture template',
-      done: summary.totalServices > 0,
+      description: 'Scaffold a microservice from a standardized architecture template',
+      done: hasReadyService,
     },
     {
       title: 'Deploy to environment',
-      description: 'Trigger deployment pipeline and verify production health checks',
-      done: summary.healthyCount > 0,
+      description: 'Container build, deployment, and health verification arrive in Phase 3',
+      done: false,
     },
   ];
 
@@ -158,7 +178,7 @@ export function DashboardPage() {
           Follow these milestones to bring your first service to production.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {checklist.map((item, index) => (
             <div
               key={item.title}

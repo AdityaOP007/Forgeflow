@@ -77,6 +77,9 @@ export function TemplatesPage() {
                     </Badge>
                   </div>
                   <div className="flex items-center space-x-1.5">
+                    <Badge variant={tpl.available ? 'healthy' : 'unknown'} className="text-xs">
+                      {tpl.available ? 'Available' : 'Coming Soon'}
+                    </Badge>
                     <Badge variant="secondary" className="capitalize text-xs">
                       {tpl.language}
                     </Badge>
@@ -107,10 +110,11 @@ export function TemplatesPage() {
               <CardFooter className="pt-2 border-t border-slate-800/60">
                 {role !== 'viewer' ? (
                   <Button
+                    disabled={!tpl.available}
                     onClick={() => navigate(`/services/new?templateId=${tpl.id}`)}
                     className="w-full justify-between"
                   >
-                    <span>Use this template</span>
+                    <span>{tpl.available ? 'Use this template' : 'Coming Soon'}</span>
                     <ArrowRight className="h-4 w-4" />
                   </Button>
                 ) : (

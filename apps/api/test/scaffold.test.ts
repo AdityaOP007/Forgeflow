@@ -34,6 +34,15 @@ describe('Scaffold Workflows & API — Checkpoint 2D', () => {
     });
   }
 
+  function assertNoSecrets(payload: unknown) {
+    const text = JSON.stringify(payload);
+    expect(text).not.toContain('ghs_');
+    expect(text).not.toContain('ghp_');
+    expect(text).not.toContain('github_pat_');
+    expect(text).not.toContain('BEGIN RSA PRIVATE KEY');
+    expect(text).not.toContain('Bearer ');
+  }
+
   function makeSteps(client: FakeGitHubClient = fakeGitHub) {
     return createScaffoldSteps({
       getGitHubClient: () => client,
@@ -145,10 +154,21 @@ describe('Scaffold Workflows & API — Checkpoint 2D', () => {
     expect(logsRes.status).toBe(200);
     expect(Object.keys(logsRes.body).sort()).toEqual(['logs', 'nextCursor']);
     expect(logsRes.body.logs.length).toBeGreaterThanOrEqual(4);
+    const logItemKeys = Object.keys(logsRes.body.logs[0]).sort();
+    expect(logItemKeys).toEqual([
+      'createdAt',
+      'id',
+      'level',
+      'message',
+      'stepKey',
+      'workflowRunId',
+    ]);
+    for (const k of logItemKeys) expect(k).not.toContain('_');
     expect(logsRes.body.nextCursor).toBe(logsRes.body.logs[logsRes.body.logs.length - 1].id);
-    const logsText = JSON.stringify(logsRes.body);
-    expect(logsText).not.toContain('ghs_');
-    expect(logsText).not.toContain('BEGIN RSA PRIVATE KEY');
+    assertNoSecrets(res.body);
+    assertNoSecrets(wfRes.body);
+    assertNoSecrets(svcRes.body);
+    assertNoSecrets(logsRes.body);
   });
 
   it('crash after repository is created before saving, then retry, ends with exactly ONE repository', async () => {
@@ -240,6 +260,51 @@ describe('Scaffold Workflows & API — Checkpoint 2D', () => {
       'A repository named taken-repo already exists in forgeflow-test-org that this service did not create. Choose a different service name.'
     );
     expect(fakeGitHub.repos.size).toBe(1);
+  });
+
+  it('repository with another service ownership marker fails at validate and leaves repository untouched', async () => {
+    const app = makeTestApp(true);
+
+    // Pre-create repository with a DIFFERENT service ForgeFlow marker
+    await fakeGitHub.createRepository({
+      name: 'other-marker-repo',
+      description: 'Previous service [forgeflow:000000000000]',
+      private: true,
+    });
+    const beforeHead = await fakeGitHub.getHeadCommit('other-marker-repo', 'main');
+
+    const res = await request(app)
+      .post('/api/services/scaffold')
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({
+        name: 'other-marker-repo',
+        description: 'Should not adopt another service marker',
+        templateId: fastApiTemplateId,
+      });
+    expect(res.status).toBe(202);
+    const { workflowId } = res.body;
+
+    await claimNext('worker-other-marker');
+    await executeWorkflow({
+      runId: workflowId,
+      workerId: 'worker-other-marker',
+      steps: makeSteps(),
+    });
+
+    const wfRes = await request(app)
+      .get(`/api/workflows/${workflowId}`)
+      .set('Authorization', 'Bearer dev-owner-token');
+    expect(wfRes.body.status).toBe('failed');
+    expect(wfRes.body.failedStepKey).toBe('validate');
+    expect(wfRes.body.errorSummary).toBe(
+      'A repository named other-marker-repo already exists in forgeflow-test-org that this service did not create. Choose a different service name.'
+    );
+
+    const afterHead = await fakeGitHub.getHeadCommit('other-marker-repo', 'main');
+    expect(afterHead).toEqual(beforeHead);
+    expect(fakeGitHub.repos.get('other-marker-repo')?.branches.get('main')?.commits).toHaveLength(
+      1
+    );
   });
 
   it('repo creation failure, then fix, then retry succeeds', async () => {

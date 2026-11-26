@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -40,6 +40,7 @@ import {
 } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Skeleton } from '../components/ui/skeleton';
+import { isSafeHttpsUrl } from '../lib/utils';
 
 export function ServiceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -63,6 +64,10 @@ export function ServiceDetailPage() {
   // Check edit & delete authorization
   const isOwner = Boolean(user?.id && service?.ownerId && user.id === service.ownerId);
   const canModify = role === 'admin' || (role === 'developer' && isOwner);
+  const hasActiveWorkflow = Boolean(
+    service?.provisioningStatus === 'provisioning' ||
+    service?.workflowRuns?.some((r) => r.status === 'queued' || r.status === 'running')
+  );
 
   // Edit form handling
   const {
@@ -158,6 +163,18 @@ export function ServiceDetailPage() {
             <div className="flex items-center space-x-3">
               <h1 className="text-2xl font-bold tracking-tight text-white">{service.name}</h1>
               {getHealthBadge(service.health)}
+              <Badge
+                variant={
+                  service.provisioningStatus === 'ready'
+                    ? 'healthy'
+                    : service.provisioningStatus === 'failed'
+                      ? 'failed'
+                      : 'degraded'
+                }
+                className="capitalize"
+              >
+                {service.provisioningStatus}
+              </Badge>
             </div>
             <p className="text-xs text-slate-500 font-mono mt-0.5">{service.slug}</p>
           </div>
@@ -186,6 +203,12 @@ export function ServiceDetailPage() {
             <Button
               variant="destructive"
               size="sm"
+              disabled={hasActiveWorkflow}
+              title={
+                hasActiveWorkflow
+                  ? 'Cannot delete while a provisioning workflow is running'
+                  : 'Delete service'
+              }
               onClick={() => setIsDeleteDialogOpen(true)}
               className="space-x-1.5 focus-visible:ring-2 focus-visible:ring-rose-500"
             >
@@ -195,6 +218,33 @@ export function ServiceDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Provisioning Status Banner */}
+      {(service.provisioningStatus === 'provisioning' || service.provisioningStatus === 'failed') &&
+        service.latestWorkflowId && (
+          <div
+            className={`p-4 rounded-lg border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              service.provisioningStatus === 'failed'
+                ? 'border-rose-500/40 bg-rose-950/20 text-rose-200'
+                : 'border-amber-500/40 bg-amber-950/20 text-amber-200'
+            }`}
+          >
+            <div className="flex items-center space-x-2.5 text-sm">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>
+                {service.provisioningStatus === 'failed'
+                  ? 'Service provisioning failed. Inspect the workflow logs or retry provisioning.'
+                  : 'Service provisioning is currently in progress.'}
+              </span>
+            </div>
+            <Link
+              to={`/workflows/${service.latestWorkflowId}`}
+              className="text-sm font-medium underline underline-offset-2 shrink-0 hover:opacity-80"
+            >
+              View Latest Workflow &rarr;
+            </Link>
+          </div>
+        )}
 
       {/* Tabs: Overview, Deployments, Pipelines, Logs, Configuration, Documentation */}
       <Tabs defaultValue="overview" className="space-y-4">
@@ -228,7 +278,10 @@ export function ServiceDetailPage() {
                   </span>
                   <div className="flex items-center space-x-2 text-slate-200 text-sm">
                     <Layers className="h-4 w-4 text-indigo-400" />
-                    <span>{service.templateName || 'Custom / None'}</span>
+                    <span>
+                      {service.templateName || 'Custom / None'}
+                      {service.templateVersion ? ` (v${service.templateVersion})` : ''}
+                    </span>
                   </div>
                 </div>
 
@@ -236,11 +289,11 @@ export function ServiceDetailPage() {
                   <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">
                     Repository
                   </span>
-                  {service.repositoryUrl ? (
+                  {isSafeHttpsUrl(service.repositoryUrl) ? (
                     <a
                       href={service.repositoryUrl}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       className="inline-flex items-center space-x-1.5 text-sm text-indigo-400 hover:text-indigo-300 hover:underline truncate max-w-full"
                     >
                       <span className="truncate">
@@ -263,6 +316,25 @@ export function ServiceDetailPage() {
                   </div>
                 </div>
               </div>
+
+              {service.latestWorkflowId && (
+                <div className="mt-6 pt-6 border-t border-slate-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                      Latest Provisioning Workflow
+                    </span>
+                    <span className="text-xs font-mono text-slate-400">
+                      {service.latestWorkflowId}
+                    </span>
+                  </div>
+                  <Link
+                    to={`/workflows/${service.latestWorkflowId}`}
+                    className="text-sm text-indigo-400 hover:text-indigo-300 hover:underline font-medium"
+                  >
+                    View Workflow Progress &rarr;
+                  </Link>
+                </div>
+              )}
 
               {service.description && (
                 <div className="mt-6 pt-6 border-t border-slate-800">
@@ -291,18 +363,51 @@ export function ServiceDetailPage() {
           </Card>
         </TabsContent>
 
-        {/* Tab 3: Pipelines (Empty State - Phase 2) */}
+        {/* Tab 3: Pipelines / Workflows */}
         <TabsContent value="pipelines">
-          <Card className="border-slate-800 bg-slate-900/40 p-8 text-center">
-            <GitFork className="h-8 w-8 text-blue-400 mx-auto mb-3" />
-            <h3 className="text-base font-semibold text-white">Pipelines</h3>
-            <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 mb-3">
-              Automated GitHub Actions CI/CD workflows, build artifacts, and test execution results.
-            </p>
-            <Badge variant="outline" className="text-blue-400 border-blue-500/30">
-              <Clock className="h-3 w-3 mr-1 inline" /> Available in Phase 2
-            </Badge>
-          </Card>
+          {service.workflowRuns && service.workflowRuns.length > 0 ? (
+            <Card className="border-slate-800 bg-slate-900/60">
+              <CardContent className="p-4 space-y-3">
+                {service.workflowRuns.map((run) => (
+                  <div
+                    key={run.id}
+                    onClick={() => navigate(`/workflows/${run.id}`)}
+                    className="p-3.5 rounded-lg border border-slate-800 bg-slate-950/50 hover:border-slate-700 cursor-pointer flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm font-medium text-white capitalize">
+                          {run.type} workflow
+                        </span>
+                        <Badge
+                          variant={
+                            run.status === 'succeeded'
+                              ? 'healthy'
+                              : run.status === 'failed'
+                                ? 'failed'
+                                : 'degraded'
+                          }
+                          className="capitalize text-xs"
+                        >
+                          {run.status}
+                        </Badge>
+                      </div>
+                      <div className="text-xs font-mono text-slate-500 mt-1">{run.id}</div>
+                    </div>
+                    <span className="text-xs text-indigo-400 font-medium">View &rarr;</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-slate-800 bg-slate-900/40 p-8 text-center">
+              <GitFork className="h-8 w-8 text-blue-400 mx-auto mb-3" />
+              <h3 className="text-base font-semibold text-white">Pipelines</h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto mt-1">
+                No workflow runs have been recorded for this service yet.
+              </p>
+            </Card>
+          )}
         </TabsContent>
 
         {/* Tab 4: Logs (Empty State - Phase 4) */}
@@ -419,6 +524,11 @@ export function ServiceDetailPage() {
               <span className="font-semibold text-white">{service.name}</span>? This will remove the
               service, attached environments, workflow runs, and records from the platform catalog.
               This action cannot be undone.
+              {service.repositoryUrl && (
+                <span className="block mt-2 text-amber-300 font-medium">
+                  The GitHub repository will not be deleted.
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { repositoryUrlSchema } from './index.js';
+import { repositoryUrlSchema, isSafeHttpsUrl } from './index.js';
 
 describe('repositoryUrlSchema', () => {
   it('accepts valid https URL', () => {
@@ -104,5 +104,18 @@ describe('repositoryUrlSchema', () => {
     const longUrl = 'https://example.com/' + 'a'.repeat(2040);
     const res = repositoryUrlSchema.safeParse(longUrl);
     expect(res.success).toBe(false);
+  });
+});
+
+describe('isSafeHttpsUrl', () => {
+  it('accepts valid https:// URLs and rejects http://, javascript:, data:, and invalid URLs', () => {
+    expect(isSafeHttpsUrl('https://github.com/forgeflow-aditya/orders-service')).toBe(true);
+    expect(isSafeHttpsUrl('http://github.com/forgeflow-aditya/orders-service')).toBe(false);
+    expect(isSafeHttpsUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeHttpsUrl('data:text/html,<script>alert(1)</script>')).toBe(false);
+    expect(isSafeHttpsUrl('')).toBe(false);
+    expect(isSafeHttpsUrl(null)).toBe(false);
+    expect(isSafeHttpsUrl(undefined)).toBe(false);
+    expect(isSafeHttpsUrl('https://')).toBe(false);
   });
 });

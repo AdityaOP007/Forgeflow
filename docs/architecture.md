@@ -123,3 +123,49 @@ erDiagram
         timestamp created_at "now()"
     }
 ```
+
+---
+
+## Phase 2 Workflow Engine & GitHub Integration
+
+### Workflow State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued: POST /api/services/scaffold
+    queued --> running: Worker claims via FOR UPDATE SKIP LOCKED
+    running --> succeeded: All 4 steps succeed
+    running --> failed: Step throws / retries exhausted
+    queued --> cancelled: POST /api/workflows/:id/cancel
+    running --> cancelled: cancel_requested checked before next step
+    failed --> queued: POST /api/workflows/:id/retry (resets failed/skipped steps)
+```
+
+### Queue & Worker Execution
+
+- **Queue Claiming**: `claimNext(workerId)` selects the oldest `queued` run using PostgreSQL `FOR UPDATE SKIP LOCKED`, transitions it to `running`, increments `attempts`, and sets `locked_at` / `locked_by`.
+- **Heartbeat & Stale-Lock Recovery**: While executing steps, the worker refreshes `locked_at` every 15s (`LOCK_HEARTBEAT_MS`). On startup and every 30s, `requeueStale()` recovers any `running` run whose `locked_at` is older than 60s (`STALE_LOCK_MS`), returning it to `queued` (or `failed` if `attempts >= maxAttempts`).
+- **Cancellation**: `POST /api/workflows/:id/cancel` cancels `queued` runs immediately or sets `cancel_requested = true` on `running` runs so the executor stops cleanly before starting the next step.
+
+### GitHub Integration Sequence
+
+```mermaid
+sequenceDiagram
+    participant UI as Web Wizard
+    participant API as Express API
+    participant DB as PostgreSQL
+    participant Worker as Workflow Worker
+    participant GH as GitHub API (v2026-03-10)
+
+    UI->>API: POST /api/services/scaffold
+    API->>DB: Insert service (provisioning), workflow_run (queued), 4 workflow_steps, audit_log
+    API-->>UI: 202 { serviceId, workflowId, status: "queued" }
+    Worker->>DB: claimNext() via FOR UPDATE SKIP LOCKED
+    Worker->>GH: validate: getInstallationInfo() + getRepository(slug)
+    Note over Worker,GH: Fails if foreign repo exists without [forgeflow:<12-hex>] marker
+    Worker->>Worker: generate: renderTemplate(python-fastapi)
+    Worker->>GH: create_repository: POST /orgs/{org}/repos (description + ownership marker)
+    Worker->>GH: push_files: Git Data API (blobs -> tree -> commit -> patch ref) + verify SHA
+    Worker->>DB: Mark steps/run succeeded, service provisioning_status='ready'
+    UI->>API: Poll GET /api/workflows/:id & /logs until terminal
+```

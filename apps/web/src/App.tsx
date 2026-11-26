@@ -8,6 +8,8 @@ import { CatalogPage } from './pages/catalog-page';
 import { CreateServicePage } from './pages/create-service-page';
 import { ServiceDetailPage } from './pages/service-detail-page';
 import { TemplatesPage } from './pages/templates-page';
+import { WorkflowsPage } from './pages/workflows-page';
+import { WorkflowDetailPage } from './pages/workflow-detail-page';
 import { ComingSoonPage } from './pages/coming-soon-page';
 import { Skeleton } from './components/ui/skeleton';
 import { ErrorBoundary } from './components/error-boundary';
@@ -52,6 +54,8 @@ function AppRouter() {
         <Route path="/services/new" element={<CreateServicePage />} />
         <Route path="/services/:id" element={<ServiceDetailPage />} />
         <Route path="/templates" element={<TemplatesPage />} />
+        <Route path="/workflows" element={<WorkflowsPage />} />
+        <Route path="/workflows/:id" element={<WorkflowDetailPage />} />
 
         {/* Coming Soon Feature Routes */}
         <Route

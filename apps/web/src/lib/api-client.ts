@@ -9,6 +9,13 @@ import type {
   CreateServiceInput,
   UpdateServiceInput,
   ListServicesQuery,
+  ScaffoldServiceInput,
+  ScaffoldServiceResponse,
+  ListWorkflowsQuery,
+  WorkflowListItem,
+  WorkflowDetailResponse,
+  WorkflowLogsResponse,
+  GitHubIntegrationStatus,
 } from '@forgeflow/shared-types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -138,4 +145,63 @@ export async function deleteService(id: string): Promise<void> {
 
 export async function fetchTemplates(): Promise<TemplateItem[]> {
   return apiRequest<TemplateItem[]>('/api/templates');
+}
+
+export async function fetchGitHubIntegration(): Promise<GitHubIntegrationStatus> {
+  return apiRequest<GitHubIntegrationStatus>('/api/integrations/github');
+}
+
+export async function scaffoldService(
+  input: ScaffoldServiceInput
+): Promise<ScaffoldServiceResponse> {
+  return apiRequest<ScaffoldServiceResponse>('/api/services/scaffold', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchWorkflows(
+  query?: Partial<ListWorkflowsQuery>
+): Promise<PaginatedResponse<WorkflowListItem>> {
+  const params = new URLSearchParams();
+  if (query?.page) params.set('page', String(query.page));
+  if (query?.pageSize) params.set('pageSize', String(query.pageSize));
+  if (query?.status) params.set('status', query.status);
+  if (query?.serviceId) params.set('serviceId', query.serviceId);
+
+  const qs = params.toString();
+  return apiRequest<PaginatedResponse<WorkflowListItem>>(`/api/workflows${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchWorkflowById(id: string): Promise<WorkflowDetailResponse> {
+  return apiRequest<WorkflowDetailResponse>(`/api/workflows/${id}`);
+}
+
+export async function fetchWorkflowLogs(
+  id: string,
+  after = 0,
+  limit = 200
+): Promise<WorkflowLogsResponse> {
+  const params = new URLSearchParams({
+    after: String(after),
+    limit: String(limit),
+  });
+  return apiRequest<WorkflowLogsResponse>(`/api/workflows/${id}/logs?${params.toString()}`);
+}
+
+export async function retryWorkflow(id: string): Promise<{ workflowId: string; status: string }> {
+  return apiRequest<{ workflowId: string; status: string }>(`/api/workflows/${id}/retry`, {
+    method: 'POST',
+  });
+}
+
+export async function cancelWorkflow(
+  id: string
+): Promise<{ workflowId: string; status: string; cancelRequested: boolean }> {
+  return apiRequest<{ workflowId: string; status: string; cancelRequested: boolean }>(
+    `/api/workflows/${id}/cancel`,
+    {
+      method: 'POST',
+    }
+  );
 }

@@ -89,6 +89,10 @@ export function createWorker(options: WorkerOptions = {}) {
   async function start() {
     isRunning = true;
     console.log(`[Worker ${workerId}] Starting workflow worker (poll: ${pollMs}ms)...`);
+    const githubCfg = getGitHubConfig();
+    console.log(
+      `GitHub integration: configured=${githubCfg.configured} org=${githubCfg.config?.org ?? 'none'}`
+    );
 
     // Initial requeue of stale runs
     try {
