@@ -434,4 +434,56 @@ export class RealGitHubClient implements GitHubClient {
 
     return commit;
   }
+
+  /** Returns the recursive tree of blobs/trees for a given commit SHA. */
+  async getRepositoryTree(
+    org: string,
+    repo: string,
+    treeSha: string
+  ): Promise<{ path: string; type: string; sha: string }[]> {
+    const octokit = await this.getOctokit();
+    return this.withRetry(`Get tree ${org}/${repo}@${treeSha}`, async () => {
+      const { data } = await octokit.rest.git.getTree({
+        owner: org,
+        repo,
+        tree_sha: treeSha,
+        recursive: '1',
+      });
+      return data.tree as { path: string; type: string; sha: string }[];
+    });
+  }
+
+  /** Returns check runs (GitHub Actions jobs) for a given commit SHA. */
+  async listCheckRunsForCommit(
+    org: string,
+    repo: string,
+    ref: string
+  ): Promise<{ name: string; status: string; conclusion: string | null }[]> {
+    const octokit = await this.getOctokit();
+    // Use workflow runs + jobs (requires actions read, not checks read)
+    return this.withRetry(`List CI jobs ${org}/${repo}@${ref}`, async () => {
+      const { data: runsData } = await octokit.rest.actions.listWorkflowRunsForRepo({
+        owner: org,
+        repo,
+        head_sha: ref,
+        per_page: 10,
+      });
+      const allJobs: { name: string; status: string; conclusion: string | null }[] = [];
+      for (const run of runsData.workflow_runs) {
+        const { data: jobsData } = await octokit.rest.actions.listJobsForWorkflowRun({
+          owner: org,
+          repo,
+          run_id: run.id,
+        });
+        for (const job of jobsData.jobs) {
+          allJobs.push({
+            name: job.name,
+            status: job.status,
+            conclusion: job.conclusion ?? null,
+          });
+        }
+      }
+      return allJobs;
+    });
+  }
 }
