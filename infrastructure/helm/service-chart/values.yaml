@@ -1,0 +1,29 @@
+name: ''
+
+image:
+  repository: ''
+  tag: ''
+  pullPolicy: IfNotPresent
+
+imagePullSecretName: ''
+
+port: 8000
+nodePort: null
+replicas: 1
+
+commitSha: ''
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+env: {}
+
+database:
+  enabled: true
+  existingSecret: ''
+  storage: 1Gi

@@ -1013,6 +1013,33 @@ MIIEowIBAAKCAQEA0Y1+abcdefghijklmnopqrstuvwxyz0123456789+/=
       // Combined secrets
       const combined = `Token ghs_123456789012345678901234567890 and Bearer secret-token-value!`;
       expect(redactSecrets(combined)).toBe('Token [REDACTED_TOKEN] and Bearer [REDACTED_TOKEN]!');
+
+      // JWT-like string
+      const jwt = 'Bad jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0In0.sig123 here';
+      expect(redactSecrets(jwt)).toBe('Bad jwt [REDACTED_JWT] here');
+
+      // Kubeconfig fields
+      const kube = [
+        'certificate-authority-data: LS0tLS1CRUdJTi1DRVJUSUZJQ0FURS0tLS0t',
+        'client-key-data: bXktc2VjcmV0LWtleQ==',
+        'token: kube-sa-token-xyz123',
+      ].join('\n');
+      const redactedKube = redactSecrets(kube);
+      expect(redactedKube).not.toContain('LS0tLS1CRUdJTi');
+      expect(redactedKube).not.toContain('bXktc2VjcmV0LWtleQ');
+      expect(redactedKube).not.toContain('kube-sa-token-xyz123');
+
+      // dockerconfigjson auth value
+      const dockerCfg = '{"auths":{"ghcr.io":{"username":"u","auth":"dTpwYXNzd29yZA=="}}}';
+      expect(redactSecrets(dockerCfg)).not.toContain('dTpwYXNzd29yZA==');
+
+      // password= and :password@
+      expect(redactSecrets('DB password=mysecretpass&ssl=true')).toBe(
+        'DB password=[REDACTED]&ssl=true'
+      );
+      expect(redactSecrets('postgresql+psycopg://postgres:mysecretpass@db:5432/app')).toBe(
+        'postgresql+psycopg://postgres:[REDACTED]@db:5432/app'
+      );
     });
   });
 });

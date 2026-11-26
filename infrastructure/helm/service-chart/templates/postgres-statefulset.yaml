@@ -1,0 +1,64 @@
+{{- if .Values.database.enabled }}
+{{- $secret := required "database.existingSecret is required when database.enabled is true" .Values.database.existingSecret -}}
+{{- $dbName := (include "service-chart.name" .) | replace "-" "_" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "service-chart.dbHost" . }}
+  labels:
+    {{- include "service-chart.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "service-chart.dbHost" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "service-chart.dbHost" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "service-chart.dbHost" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/managed-by: forgeflow
+        forgeflow.io/environment: development
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: {{ $dbName | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", {{ $dbName | quote }}]
+            periodSeconds: 5
+            failureThreshold: 6
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "service-chart.labels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.database.storage }}
+{{- end }}
+

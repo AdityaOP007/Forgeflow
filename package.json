@@ -15,7 +15,12 @@
     "db:migrate": "pnpm --filter @forgeflow/api db:migrate",
     "db:seed": "pnpm --filter @forgeflow/api db:seed",
     "db:studio": "pnpm --filter @forgeflow/api db:studio",
-    "db:reset": "pnpm --filter @forgeflow/api db:reset"
+    "db:reset": "pnpm --filter @forgeflow/api db:reset",
+    "k8s:doctor": "node scripts/k8s/doctor.mjs",
+    "k8s:up": "node scripts/k8s/up.mjs",
+    "k8s:down": "node scripts/k8s/down.mjs",
+    "k8s:verify-rbac": "node scripts/k8s/verify-rbac.mjs",
+    "k8s:smoke": "pnpm --filter @forgeflow/api exec tsx ../../scripts/k8s/smoke.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
