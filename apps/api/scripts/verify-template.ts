@@ -85,7 +85,7 @@ function runPython312Checks(label: string, projectDir: string): void {
     'set -euo pipefail',
     'python --version',
     'python -m venv /tmp/.venv',
-    '/tmp/.venv/bin/pip install --quiet --prefer-binary -c constraints.txt -r requirements.txt -r requirements-dev.txt',
+    '/tmp/.venv/bin/pip install --quiet --no-cache-dir --retries 10 --timeout 120 --prefer-binary -c constraints.txt -r requirements.txt -r requirements-dev.txt',
     'echo "--- ruff check app tests ---"',
     '/tmp/.venv/bin/ruff check --cache-dir /tmp/.ruff_cache app tests',
     'echo "--- ruff format --check app tests ---"',
@@ -139,7 +139,7 @@ async function main(): Promise<void> {
     const files = renderTemplate('python-fastapi', {
       serviceName: 'smoke-service',
       description: 'Smoke verification service for ForgeFlow FastAPI template.',
-      templateVersion: '1.0.0',
+      templateVersion: '1.1.0',
     });
 
     if (files.length !== 21) {
@@ -152,6 +152,21 @@ async function main(): Promise<void> {
       fs.writeFileSync(targetPath, file.content, 'utf8');
     }
     console.log(`PASS: Rendered ${files.length} files for smoke-service`);
+
+    // 0. Run actionlint over the rendered .github/workflows/ci.yml
+    runStep(
+      'smoke-service: actionlint (.github/workflows/ci.yml with rhysd/actionlint:1.7.12)',
+      'docker',
+      [
+        'run',
+        '--rm',
+        '-v',
+        `${path.join(tempDir, '.github/workflows')}:/workflows:ro`,
+        'rhysd/actionlint:1.7.12',
+        '/workflows/ci.yml',
+      ],
+      tempDir
+    );
 
     // 1. Run Python 3.12 lint, format, and unit tests inside python:3.12-slim container
     runPython312Checks(
@@ -167,7 +182,7 @@ async function main(): Promise<void> {
     const hostileFiles = renderTemplate('python-fastapi', {
       serviceName: 'smoke-hostile',
       description: hostileDescription,
-      templateVersion: '1.0.0',
+      templateVersion: '1.1.0',
     });
 
     for (const file of hostileFiles) {

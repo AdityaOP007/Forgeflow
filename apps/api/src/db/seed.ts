@@ -22,7 +22,7 @@ export async function seed(customDb?: NodePgDatabase<typeof schema>) {
       slug: 'python-fastapi',
       language: 'python',
       framework: 'fastapi',
-      version: '1.0.0',
+      version: '1.1.0',
       source_location: 'templates/fastapi-service',
     },
   ];

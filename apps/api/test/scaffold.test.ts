@@ -115,7 +115,7 @@ describe('Scaffold Workflows & API — Checkpoint 2D', () => {
     expect(wfRes.body.steps.every((s: { status: string }) => s.status === 'succeeded')).toBe(true);
     expect(wfRes.body.resources.template).toEqual({
       slug: 'python-fastapi',
-      version: '1.0.0',
+      version: '1.1.0',
       fileCount: 21,
     });
     expect(wfRes.body.resources.repository.fullName).toBe('forgeflow-test-org/inventory-api');
@@ -130,7 +130,7 @@ describe('Scaffold Workflows & API — Checkpoint 2D', () => {
     const expectedRendered = renderTemplate('python-fastapi', {
       serviceName: 'inventory-api',
       description: 'Tracks warehouse inventory.',
-      templateVersion: '1.0.0',
+      templateVersion: '1.1.0',
     });
     expect(latestCommit.files.size).toBe(expectedRendered.length);
     for (const f of expectedRendered) {
@@ -143,7 +143,7 @@ describe('Scaffold Workflows & API — Checkpoint 2D', () => {
       .set('Authorization', 'Bearer viewer-token');
     expect(svcRes.status).toBe(200);
     expect(svcRes.body.provisioningStatus).toBe('ready');
-    expect(svcRes.body.templateVersion).toBe('1.0.0');
+    expect(svcRes.body.templateVersion).toBe('1.1.0');
     expect(svcRes.body.latestWorkflowId).toBe(workflowId);
     expect(svcRes.body.repositoryUrl).toBe('https://github.com/forgeflow-test-org/inventory-api');
 

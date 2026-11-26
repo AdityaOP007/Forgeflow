@@ -316,6 +316,8 @@ export function generateSlug(name: string): string {
 }
 
 // ─── Safe HTTPS URL check ────────────────────────────────────────────
+export const PUBLISH_JOB_NAME = 'Publish Image' as const;
+
 export function isSafeHttpsUrl(url: string | null | undefined): url is string {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();

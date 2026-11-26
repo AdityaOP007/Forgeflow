@@ -13,6 +13,10 @@ import {
   getTemplateEntry,
   isTemplateAvailable,
 } from '../src/templates/registry.js';
+import { eq } from 'drizzle-orm';
+import { db } from '../src/db/client.js';
+import { templates } from '../src/db/schema.js';
+import { seed } from '../src/db/seed.js';
 
 const tempDirs: string[] = [];
 
@@ -31,12 +35,12 @@ afterEach(() => {
 
 describe('Template Registry & Engine — Checkpoint 2B', () => {
   describe('Registry', () => {
-    it('marks python-fastapi as available at version 1.0.0 and node-express as unavailable', () => {
+    it('marks python-fastapi as available at version 1.1.0 and node-express as unavailable', () => {
       const fastapi = getTemplateEntry('python-fastapi');
       expect(fastapi).toEqual({
         slug: 'python-fastapi',
         directory: 'templates/fastapi-service',
-        version: '1.0.0',
+        version: '1.1.0',
         available: true,
       });
       expect(isTemplateAvailable('python-fastapi')).toBe(true);
@@ -268,6 +272,22 @@ describe('Template Registry & Engine — Checkpoint 2B', () => {
       const second = renderTemplate('python-fastapi', vars);
 
       expect(first).toEqual(second);
+    });
+
+    it('seed() idempotently upserts python-fastapi version and sourceLocation to 1.1.0', async () => {
+      await db
+        .update(templates)
+        .set({ version: '1.0.0', source_location: 'templates/old-location' })
+        .where(eq(templates.slug, 'python-fastapi'));
+
+      await seed(db);
+      await seed(db);
+
+      const updated = await db.query.templates.findFirst({
+        where: eq(templates.slug, 'python-fastapi'),
+      });
+      expect(updated?.version).toBe('1.1.0');
+      expect(updated?.source_location).toBe('templates/fastapi-service');
     });
   });
 });

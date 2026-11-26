@@ -18,7 +18,7 @@ export const TEMPLATE_REGISTRY: ReadonlyMap<string, TemplateRegistryEntry> = new
     {
       slug: 'python-fastapi',
       directory: 'templates/fastapi-service',
-      version: '1.0.0',
+      version: '1.1.0',
       available: true,
     },
   ],

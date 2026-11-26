@@ -49,3 +49,11 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## Container Image
+
+Pushes to `main` publish an immutable container image to GitHub Container Registry:
+
+```text
+ghcr.io/<owner>/__SERVICE_NAME__:<full-40-char-commit-sha>
+```
+

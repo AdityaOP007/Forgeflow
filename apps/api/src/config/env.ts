@@ -23,6 +23,8 @@ const envSchema = z.object({
   GITHUB_APP_INSTALLATION_ID: optionalNonEmptyString,
   GITHUB_ORG: optionalNonEmptyString,
   GITHUB_APP_PRIVATE_KEY_PATH: optionalNonEmptyString,
+  GHCR_PULL_USERNAME: optionalNonEmptyString,
+  GHCR_PULL_TOKEN: optionalNonEmptyString,
 });
 
 export type Env = z.infer<typeof envSchema>;

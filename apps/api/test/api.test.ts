@@ -671,7 +671,7 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
       const fastapi = res.body.find((t: { slug: string }) => t.slug === 'python-fastapi');
       const node = res.body.find((t: { slug: string }) => t.slug === 'node-express');
       expect(fastapi?.available).toBe(true);
-      expect(fastapi?.version).toBe('1.0.0');
+      expect(fastapi?.version).toBe('1.1.0');
       expect(node?.available).toBe(false);
 
       // Verify no snake_case
