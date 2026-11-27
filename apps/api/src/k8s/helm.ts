@@ -86,17 +86,17 @@ export async function ensureDbSecret(
     }
   }
 
-  const password = crypto.randomBytes(18).toString('base64url');
+  const password = crypto.randomBytes(24).toString('hex');
   const dbName = serviceSlug.replace(/-/g, '_');
+  const databaseUrl = `postgresql+psycopg://postgres:${password}@${serviceSlug}-postgres:5432/${dbName}`;
   const manifest = JSON.stringify({
     apiVersion: 'v1',
     kind: 'Secret',
     metadata: { name: secretName },
     type: 'Opaque',
     stringData: {
-      POSTGRES_USER: 'appuser',
       POSTGRES_PASSWORD: password,
-      POSTGRES_DB: dbName,
+      DATABASE_URL: databaseUrl,
     },
   });
 
@@ -113,6 +113,7 @@ export interface DeployHelmParams {
   nodePort: number;
   commitSha: string;
   chartPath?: string;
+  timeoutSeconds?: number;
 }
 
 export async function deployHelmRelease(
@@ -120,6 +121,7 @@ export async function deployHelmRelease(
   params: DeployHelmParams
 ): Promise<HelmReleaseStatus> {
   const rollbackFlag = await getHelmRollbackFlag(runner);
+  const timeoutSeconds = params.timeoutSeconds ?? 300;
   const valuesPayload = JSON.stringify({
     name: params.serviceSlug,
     image: {
@@ -150,9 +152,9 @@ export async function deployHelmRelease(
       rollbackFlag,
       '--wait',
       '--timeout',
-      '180s',
+      `${timeoutSeconds}s`,
     ],
-    { stdin: valuesPayload, timeoutMs: 210_000 }
+    { stdin: valuesPayload, timeoutMs: (timeoutSeconds + 30) * 1000 }
   );
 
   return getHelmReleaseStatus(runner, params.releaseName);
@@ -238,20 +240,30 @@ export async function checkHttpHealth(
   url: string,
   fetchFn: typeof fetch = fetch
 ): Promise<{ ok: boolean; error?: string }> {
-  for (const suffix of ['/health', '/health/ready']) {
-    try {
-      const res = await fetchFn(`${url}${suffix}`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) {
-        return { ok: false, error: `${suffix} returned HTTP ${res.status}` };
+  const maxAttempts = 5;
+  let lastError = 'unknown error';
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let allOk = true;
+    for (const suffix of ['/health', '/health/ready']) {
+      try {
+        const res = await fetchFn(`${url}${suffix}`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) {
+          allOk = false;
+          lastError = `${suffix} returned HTTP ${res.status}`;
+          break;
+        }
+      } catch (err) {
+        allOk = false;
+        lastError = `${suffix} check failed: ${err instanceof Error ? err.message : String(err)}`;
+        break;
       }
-    } catch (err) {
-      return {
-        ok: false,
-        error: `${suffix} check failed: ${err instanceof Error ? err.message : String(err)}`,
-      };
+    }
+    if (allOk) return { ok: true };
+    if (attempt < maxAttempts) {
+      await new Promise((r) => setTimeout(r, 1000));
     }
   }
-  return { ok: true };
+  return { ok: false, error: lastError };
 }

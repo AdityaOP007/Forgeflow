@@ -1,21 +1,21 @@
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import {
   PUBLISH_JOB_NAME,
   type DeployServiceInput,
   type DeployServiceResponse,
   type DeploymentItem,
   type DeploymentStatus,
-  type RollbackServiceInput,
-  type UndeployServiceInput,
+  type ListDeploymentsQuery,
+  type PaginatedResponse,
+  type RollbackDeploymentInput,
   type UndeployServiceResponse,
 } from '@forgeflow/shared-types';
 import { db } from '../../db/client.js';
 import { ciRuns, deployments, environments, services } from '../../db/schema.js';
 import { enqueue } from '../../workflows/queue.js';
 import { DEPLOY_STEP_DEFINITIONS } from '../../workflows/steps/deploy.js';
-import { ROLLBACK_STEP_DEFINITIONS } from '../../workflows/steps/rollback.js';
 import { UNDEPLOY_STEP_DEFINITIONS } from '../../workflows/steps/undeploy.js';
-import { parseGitHubRepoUrl } from '../ci/service.js';
+import { listDeployableCommits, parseGitHubRepoUrl } from '../ci/service.js';
 import { writeAuditLog } from '../services/service.js';
 
 function httpError(statusCode: number, code: string, message: string): Error {
@@ -23,6 +23,16 @@ function httpError(statusCode: number, code: string, message: string): Error {
   err.statusCode = statusCode;
   err.code = code;
   return err;
+}
+
+function assertServiceOwnerOrAdmin(
+  svc: typeof services.$inferSelect,
+  actorId: string,
+  actorRole: string
+): void {
+  if (actorRole !== 'admin' && svc.owner_id !== actorId) {
+    throw httpError(403, 'FORBIDDEN', 'Only the service owner or an admin can perform this action');
+  }
 }
 
 export function serializeDeployment(row: typeof deployments.$inferSelect): DeploymentItem {
@@ -44,11 +54,18 @@ export function serializeDeployment(row: typeof deployments.$inferSelect): Deplo
   };
 }
 
-async function ensureServiceAndEnv(serviceId: string, envName: 'development') {
+async function ensureServiceAndEnv(
+  serviceId: string,
+  envName: 'development',
+  actorId: string,
+  actorRole: string
+) {
   const [svc] = await db.select().from(services).where(eq(services.id, serviceId)).limit(1);
   if (!svc) {
     throw httpError(404, 'NOT_FOUND', 'Service not found');
   }
+  assertServiceOwnerOrAdmin(svc, actorId, actorRole);
+
   if (svc.provisioning_status !== 'ready') {
     throw httpError(409, 'SERVICE_NOT_READY', 'Service must be ready before deploying');
   }
@@ -75,6 +92,57 @@ async function ensureServiceAndEnv(serviceId: string, envName: 'development') {
   return { svc, env };
 }
 
+export async function listDeployments(
+  query: ListDeploymentsQuery
+): Promise<PaginatedResponse<DeploymentItem>> {
+  const { page, pageSize, status, serviceId, environment } = query;
+  const offset = (page - 1) * pageSize;
+
+  const conditions = [];
+  if (status) conditions.push(eq(deployments.status, status));
+  if (serviceId) conditions.push(eq(deployments.service_id, serviceId));
+
+  if (environment) {
+    const matchingEnvs = await db
+      .select({ id: environments.id })
+      .from(environments)
+      .where(eq(environments.name, environment));
+    const envIds = matchingEnvs.map((e) => e.id);
+    if (envIds.length === 0) {
+      return { data: [], total: 0, page, pageSize, totalPages: 0 };
+    }
+    conditions.push(inArray(deployments.environment_id, envIds));
+  }
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [{ value: total }] = await db
+    .select({ value: count() })
+    .from(deployments)
+    .where(whereClause);
+
+  const rows = await db
+    .select()
+    .from(deployments)
+    .where(whereClause)
+    .orderBy(desc(deployments.created_at))
+    .limit(pageSize)
+    .offset(offset);
+
+  return {
+    data: rows.map(serializeDeployment),
+    total: Number(total),
+    page,
+    pageSize,
+    totalPages: Math.ceil(Number(total) / pageSize),
+  };
+}
+
+export async function getDeploymentById(id: string): Promise<DeploymentItem | null> {
+  const [row] = await db.select().from(deployments).where(eq(deployments.id, id)).limit(1);
+  return row ? serializeDeployment(row) : null;
+}
+
 export async function listServiceDeployments(serviceId: string): Promise<DeploymentItem[]> {
   const [svc] = await db.select().from(services).where(eq(services.id, serviceId)).limit(1);
   if (!svc) {
@@ -91,47 +159,104 @@ export async function listServiceDeployments(serviceId: string): Promise<Deploym
   return rows.map(serializeDeployment);
 }
 
-export async function triggerDeploy(
-  serviceId: string,
-  input: DeployServiceInput,
-  userId: string
-): Promise<DeployServiceResponse> {
-  const { svc, env } = await ensureServiceAndEnv(serviceId, input.environmentName);
-  const parsedRepo = parseGitHubRepoUrl(svc.repository_url);
-  if (!parsedRepo) {
-    throw httpError(400, 'MISSING_REPOSITORY', 'Service does not have a valid GitHub repository');
+async function resolveDeployableCommit(
+  svc: typeof services.$inferSelect,
+  requestedSha?: string
+): Promise<string> {
+  if (svc.template_version === '1.0.0') {
+    throw httpError(
+      409,
+      'NO_PUBLISHED_IMAGE',
+      'Service uses template version 1.0.0 which does not publish container images'
+    );
   }
 
-  const commitSha = input.commitSha.toLowerCase();
+  if (!requestedSha) {
+    const deployable = await listDeployableCommits(svc.id);
+    if (deployable.length > 0) {
+      return deployable[0].commitSha;
+    }
 
-  // Verify commit is deployable (completed green CI on main with Publish Image)
-  const matchingRuns = await db
+    const completedGreen = await db
+      .select({ id: ciRuns.id })
+      .from(ciRuns)
+      .where(
+        and(
+          eq(ciRuns.service_id, svc.id),
+          eq(ciRuns.head_branch, 'main'),
+          eq(ciRuns.status, 'completed'),
+          eq(ciRuns.conclusion, 'success')
+        )
+      )
+      .limit(1);
+
+    if (completedGreen.length > 0) {
+      throw httpError(
+        409,
+        'NO_PUBLISHED_IMAGE',
+        `CI succeeded on main but no '${PUBLISH_JOB_NAME}' job succeeded`
+      );
+    }
+
+    throw httpError(
+      409,
+      'CI_NOT_READY',
+      'No completed green CI run found on main for this service'
+    );
+  }
+
+  const sha = requestedSha.toLowerCase();
+  const runs = await db
     .select()
     .from(ciRuns)
     .where(
       and(
-        eq(ciRuns.service_id, serviceId),
-        eq(ciRuns.head_sha, commitSha),
+        eq(ciRuns.service_id, svc.id),
+        eq(ciRuns.head_sha, sha),
         eq(ciRuns.head_branch, 'main'),
         eq(ciRuns.status, 'completed'),
         eq(ciRuns.conclusion, 'success')
       )
     );
 
-  const isDeployable = matchingRuns.some(
+  if (runs.length === 0) {
+    throw httpError(
+      409,
+      'CI_NOT_READY',
+      `Commit ${sha.slice(0, 7)} does not have a completed green CI run on main`
+    );
+  }
+
+  const hasPublished = runs.some(
     (r) =>
       Array.isArray(r.jobs) &&
       r.jobs.some((j) => j.name === PUBLISH_JOB_NAME && j.conclusion === 'success')
   );
 
-  if (!isDeployable) {
+  if (!hasPublished) {
     throw httpError(
-      400,
-      'COMMIT_NOT_DEPLOYABLE',
-      `Commit ${commitSha.slice(0, 7)} does not have a completed green CI run with '${PUBLISH_JOB_NAME}' on main`
+      409,
+      'NO_PUBLISHED_IMAGE',
+      `Commit ${sha.slice(0, 7)} does not have a succeeded '${PUBLISH_JOB_NAME}' job`
     );
   }
 
+  return sha;
+}
+
+export async function triggerDeploy(
+  serviceId: string,
+  input: DeployServiceInput,
+  actorId: string,
+  actorRole: string
+): Promise<DeployServiceResponse> {
+  const { svc, env } = await ensureServiceAndEnv(serviceId, input.environment, actorId, actorRole);
+  const parsedRepo = parseGitHubRepoUrl(svc.repository_url);
+  if (!parsedRepo) {
+    throw httpError(400, 'MISSING_REPOSITORY', 'Service does not have a valid GitHub repository');
+  }
+
+  const commitSha = await resolveDeployableCommit(svc, input.commitSha);
   const image = `ghcr.io/${parsedRepo.org.toLowerCase()}/${parsedRepo.repo.toLowerCase()}:${commitSha}`;
 
   let dep: typeof deployments.$inferSelect;
@@ -144,7 +269,7 @@ export async function triggerDeploy(
         commit_sha: commitSha,
         image,
         status: 'queued',
-        triggered_by: userId,
+        triggered_by: actorId,
       })
       .returning();
   } catch (err) {
@@ -168,11 +293,11 @@ export async function triggerDeploy(
       type: 'deploy',
       input: {
         deploymentId: dep.id,
-        environmentName: input.environmentName,
+        environment: input.environment,
         commitSha,
       },
       steps: [...DEPLOY_STEP_DEFINITIONS],
-      createdBy: userId,
+      createdBy: actorId,
     }));
   } catch (err) {
     await db.delete(deployments).where(eq(deployments.id, dep.id));
@@ -181,7 +306,7 @@ export async function triggerDeploy(
 
   await db.update(deployments).set({ workflow_run_id: run.id }).where(eq(deployments.id, dep.id));
 
-  await writeAuditLog(userId, 'service.deploy', 'deployment', dep.id);
+  await writeAuditLog(actorId, 'service.deploy', 'deployment', dep.id);
 
   return {
     deploymentId: dep.id,
@@ -190,54 +315,48 @@ export async function triggerDeploy(
   };
 }
 
-export async function triggerRollback(
-  serviceId: string,
-  input: RollbackServiceInput,
-  userId: string
+export async function triggerRollbackByDeploymentId(
+  targetDeploymentId: string,
+  input: RollbackDeploymentInput,
+  actorId: string,
+  actorRole: string
 ): Promise<DeployServiceResponse> {
-  const { svc, env } = await ensureServiceAndEnv(serviceId, input.environmentName);
+  const [target] = await db
+    .select()
+    .from(deployments)
+    .where(eq(deployments.id, targetDeploymentId))
+    .limit(1);
+
+  if (!target) {
+    throw httpError(404, 'NOT_FOUND', 'Target deployment not found');
+  }
+
+  const { svc, env } = await ensureServiceAndEnv(
+    target.service_id,
+    input.environment,
+    actorId,
+    actorRole
+  );
+
+  if (target.environment_id !== env.id) {
+    throw httpError(
+      400,
+      'INVALID_ROLLBACK_TARGET',
+      `Target deployment does not belong to environment '${input.environment}'`
+    );
+  }
+
+  if (target.status !== 'succeeded' && target.status !== 'rolled_back') {
+    throw httpError(
+      409,
+      'INVALID_ROLLBACK_TARGET',
+      `Only a succeeded or rolled_back deployment can be rolled back to (current status: '${target.status}')`
+    );
+  }
+
   const parsedRepo = parseGitHubRepoUrl(svc.repository_url);
   if (!parsedRepo) {
     throw httpError(400, 'MISSING_REPOSITORY', 'Service does not have a valid GitHub repository');
-  }
-
-  let target: typeof deployments.$inferSelect | undefined;
-  if (input.targetDeploymentId) {
-    const [found] = await db
-      .select()
-      .from(deployments)
-      .where(
-        and(
-          eq(deployments.id, input.targetDeploymentId),
-          eq(deployments.service_id, serviceId),
-          eq(deployments.environment_id, env.id)
-        )
-      )
-      .limit(1);
-    target = found;
-  } else {
-    // Pick most recent prior succeeded/rolled_back deployment with a different commit_sha
-    const candidates = await db
-      .select()
-      .from(deployments)
-      .where(
-        and(
-          eq(deployments.environment_id, env.id),
-          inArray(deployments.status, ['succeeded', 'rolled_back']),
-          env.deployed_commit_sha ? ne(deployments.commit_sha, env.deployed_commit_sha) : undefined
-        )
-      )
-      .orderBy(desc(deployments.created_at))
-      .limit(1);
-    target = candidates[0];
-  }
-
-  if (!target || (target.status !== 'succeeded' && target.status !== 'rolled_back')) {
-    throw httpError(
-      400,
-      'NO_ROLLBACK_TARGET',
-      'No eligible previous deployment found to roll back to'
-    );
   }
 
   const image = `ghcr.io/${parsedRepo.org.toLowerCase()}/${parsedRepo.repo.toLowerCase()}:${target.commit_sha}`;
@@ -247,13 +366,13 @@ export async function triggerRollback(
     [dep] = await db
       .insert(deployments)
       .values({
-        service_id: serviceId,
+        service_id: svc.id,
         environment_id: env.id,
         commit_sha: target.commit_sha,
         image,
         status: 'queued',
         rollback_of: target.id,
-        triggered_by: userId,
+        triggered_by: actorId,
       })
       .returning();
   } catch (err) {
@@ -273,15 +392,16 @@ export async function triggerRollback(
   let run: Awaited<ReturnType<typeof enqueue>>['run'];
   try {
     ({ run } = await enqueue({
-      serviceId,
-      type: 'rollback',
+      serviceId: svc.id,
+      type: 'deploy',
       input: {
         deploymentId: dep.id,
-        targetDeploymentId: target.id,
-        environmentName: input.environmentName,
+        rollbackOf: target.id,
+        environment: input.environment,
+        commitSha: target.commit_sha,
       },
-      steps: [...ROLLBACK_STEP_DEFINITIONS],
-      createdBy: userId,
+      steps: [...DEPLOY_STEP_DEFINITIONS],
+      createdBy: actorId,
     }));
   } catch (err) {
     await db.delete(deployments).where(eq(deployments.id, dep.id));
@@ -290,7 +410,7 @@ export async function triggerRollback(
 
   await db.update(deployments).set({ workflow_run_id: run.id }).where(eq(deployments.id, dep.id));
 
-  await writeAuditLog(userId, 'service.rollback', 'deployment', dep.id);
+  await writeAuditLog(actorId, 'service.rollback', 'deployment', dep.id);
 
   return {
     deploymentId: dep.id,
@@ -301,10 +421,11 @@ export async function triggerRollback(
 
 export async function triggerUndeploy(
   serviceId: string,
-  input: UndeployServiceInput,
-  userId: string
+  environmentName: 'development',
+  actorId: string,
+  actorRole: string
 ): Promise<UndeployServiceResponse> {
-  const { svc, env } = await ensureServiceAndEnv(serviceId, input.environmentName);
+  const { svc, env } = await ensureServiceAndEnv(serviceId, environmentName, actorId, actorRole);
 
   const active = await db
     .select({ id: deployments.id })
@@ -329,13 +450,13 @@ export async function triggerUndeploy(
     serviceId,
     type: 'undeploy',
     input: {
-      environmentName: input.environmentName,
+      environmentName,
     },
     steps: [...UNDEPLOY_STEP_DEFINITIONS],
-    createdBy: userId,
+    createdBy: actorId,
   });
 
-  await writeAuditLog(userId, 'service.undeploy', 'service', serviceId);
+  await writeAuditLog(actorId, 'service.undeploy', 'service', serviceId);
 
   return {
     workflowId: run.id,

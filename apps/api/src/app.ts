@@ -13,6 +13,7 @@ import {
   type IntegrationsRouterOptions,
 } from './modules/integrations/routes.js';
 import { workflowsRouter } from './modules/workflows/routes.js';
+import { createDeploymentsRouter } from './modules/deployments/routes.js';
 import { createWebhooksRouter, type WebhooksRouterOptions } from './modules/webhooks/routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import type { AuthVerifier } from './middleware/types.js';
@@ -69,6 +70,7 @@ export function createApp({ auth, webOrigin, integrations, services, webhooks }:
   apiRouter.use('/me', meRouter);
   apiRouter.use('/templates', templatesRouter);
   apiRouter.use('/services', createServicesRouter(services));
+  apiRouter.use('/deployments', createDeploymentsRouter());
   apiRouter.use('/workflows', workflowsRouter);
   apiRouter.use('/dashboard', dashboardRouter);
   apiRouter.use('/integrations', createIntegrationsRouter(integrations));

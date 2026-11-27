@@ -281,23 +281,27 @@ export interface DeploymentItem {
 }
 
 export const deployServiceSchema = z.object({
-  environmentName: z.literal('development').default('development'),
+  environment: z.literal('development').default('development'),
   commitSha: z
     .string()
-    .regex(/^[0-9a-f]{40}$/, 'commitSha must be a 40-character lowercase hex SHA'),
+    .regex(/^[0-9a-f]{40}$/, 'commitSha must be a 40-character lowercase hex SHA')
+    .optional(),
 });
 export type DeployServiceInput = z.infer<typeof deployServiceSchema>;
 
-export const rollbackServiceSchema = z.object({
-  environmentName: z.literal('development').default('development'),
-  targetDeploymentId: z.string().uuid('targetDeploymentId must be a valid UUID').optional(),
+export const rollbackDeploymentSchema = z.object({
+  environment: z.literal('development').default('development'),
 });
-export type RollbackServiceInput = z.infer<typeof rollbackServiceSchema>;
+export type RollbackDeploymentInput = z.infer<typeof rollbackDeploymentSchema>;
 
-export const undeployServiceSchema = z.object({
-  environmentName: z.literal('development').default('development'),
+export const listDeploymentsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  status: DeploymentStatus.optional(),
+  serviceId: z.string().uuid().optional(),
+  environment: EnvironmentName.optional(),
 });
-export type UndeployServiceInput = z.infer<typeof undeployServiceSchema>;
+export type ListDeploymentsQuery = z.infer<typeof listDeploymentsQuerySchema>;
 
 export interface DeployServiceResponse {
   deploymentId: string;

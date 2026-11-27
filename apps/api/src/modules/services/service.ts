@@ -7,7 +7,7 @@ import {
   workflowRuns,
   auditLogs,
 } from '../../db/schema.js';
-import { eq, sql, ilike, and, desc, asc, count, inArray } from 'drizzle-orm';
+import { eq, sql, ilike, and, desc, asc, count, inArray, isNotNull } from 'drizzle-orm';
 import type {
   CreateServiceInput,
   UpdateServiceInput,
@@ -423,6 +423,42 @@ export async function scaffoldService(
 
 // ─── Delete service ──────────────────────────────────────────────────
 export async function deleteService(id: string): Promise<boolean> {
+  const deployedEnvs = await db
+    .select({ id: environments.id })
+    .from(environments)
+    .where(and(eq(environments.service_id, id), isNotNull(environments.deployed_image)))
+    .limit(1);
+
+  if (deployedEnvs.length > 0) {
+    const err = new Error(
+      'Cannot delete service while an image is deployed; undeploy first'
+    ) as Error & { statusCode: number; code: string };
+    err.statusCode = 409;
+    err.code = 'SERVICE_DEPLOYED';
+    throw err;
+  }
+
+  const activeDeployOrUndeploy = await db
+    .select({ id: workflowRuns.id })
+    .from(workflowRuns)
+    .where(
+      and(
+        eq(workflowRuns.service_id, id),
+        inArray(workflowRuns.type, ['deploy', 'undeploy']),
+        inArray(workflowRuns.status, ['queued', 'running'])
+      )
+    )
+    .limit(1);
+
+  if (activeDeployOrUndeploy.length > 0) {
+    const err = new Error(
+      'Cannot delete service while a deploy or undeploy workflow is active'
+    ) as Error & { statusCode: number; code: string };
+    err.statusCode = 409;
+    err.code = 'SERVICE_DEPLOYED';
+    throw err;
+  }
+
   const activeRuns = await db
     .select({ id: workflowRuns.id })
     .from(workflowRuns)

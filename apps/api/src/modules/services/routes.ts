@@ -20,7 +20,7 @@ import {
   writeAuditLog,
 } from './service.js';
 import { createCiRouter, type CiRouterOptions } from '../ci/routes.js';
-import { createDeploymentsRouter } from '../deployments/routes.js';
+import { createServiceDeploymentsRouter } from '../deployments/routes.js';
 import { db } from '../../db/client.js';
 import { services } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -236,7 +236,7 @@ export function createServicesRouter(options: ServicesRouterOptions = {}): Route
   );
 
   router.use(createCiRouter({ createGitHubClient: options.createGitHubClient }));
-  router.use(createDeploymentsRouter());
+  router.use(createServiceDeploymentsRouter());
 
   return router;
 }

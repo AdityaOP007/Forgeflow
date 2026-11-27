@@ -339,6 +339,21 @@ export async function retry(runId: string) {
         .where(eq(services.id, run.service_id as string));
     }
 
+    // For deploy runs, reset linked failed deployment back to in_progress (if preflight succeeded) or queued
+    if (run.type === 'deploy') {
+      const preflightDone = steps.some((s) => s.key === 'preflight' && s.status === 'succeeded');
+      await tx
+        .update(deployments)
+        .set({
+          status: preflightDone ? 'in_progress' : 'queued',
+          completed_at: null,
+          error_summary: null,
+        })
+        .where(
+          and(eq(deployments.workflow_run_id, run.id as string), eq(deployments.status, 'failed'))
+        );
+    }
+
     await tx.insert(workflowLogs).values({
       workflow_run_id: run.id as string,
       level: 'info',

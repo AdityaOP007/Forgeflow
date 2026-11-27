@@ -26,8 +26,10 @@ const envSchema = z.object({
   GITHUB_WEBHOOK_SECRET: optionalNonEmptyString,
   CI_SYNC_INTERVAL_MS: z.coerce.number().int().min(1000).default(60000),
   RECONCILE_INTERVAL_MS: z.coerce.number().int().min(1000).default(30000),
+  DEPLOY_TIMEOUT_SECONDS: z.coerce.number().int().min(10).default(300),
+  CHART_PATH: optionalNonEmptyString,
   KUBECONFIG_WORKER_PATH: optionalNonEmptyString,
-  K8S_NAMESPACE: z.string().default('forgeflow-dev'),
+  K8S_NAMESPACE: z.string().min(1).default('forgeflow-dev'),
   GHCR_PULL_USERNAME: optionalNonEmptyString,
   GHCR_PULL_TOKEN: optionalNonEmptyString,
 });

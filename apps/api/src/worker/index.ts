@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../../');
 const envPath = path.join(repoRoot, 'apps/api/.env');
-dotenv.config({ path: envPath, override: true });
+dotenv.config({ path: envPath });
 console.log(`Loaded env from ${envPath}`);
 
 import { loadEnv, getEnv, getGitHubConfig } from '../config/env.js';
@@ -15,7 +15,6 @@ import { executeWorkflow, type Step } from '../workflows/executor.js';
 import { transitionRun } from '../workflows/state-machine.js';
 import { createScaffoldSteps } from '../workflows/steps/scaffold.js';
 import { createDeploySteps, type DeployStepsDeps } from '../workflows/steps/deploy.js';
-import { createRollbackSteps } from '../workflows/steps/rollback.js';
 import { createUndeploySteps } from '../workflows/steps/undeploy.js';
 import { RealGitHubClient } from '../github/client.js';
 import { RealK8sRunner } from '../k8s/exec.js';
@@ -69,11 +68,21 @@ const deployDeps: DeployStepsDeps = {
     if (!env.GHCR_PULL_USERNAME || !env.GHCR_PULL_TOKEN) return null;
     return { username: env.GHCR_PULL_USERNAME, token: env.GHCR_PULL_TOKEN };
   },
+  getGitHubClient: () => {
+    const cfg = getGitHubConfig();
+    if (!cfg.configured || !cfg.config) return null;
+    return new RealGitHubClient(cfg.config);
+  },
   getExpectedOrg: () => getGitHubConfig().config?.org ?? null,
+  getChartPath: () => {
+    const raw = getEnv().CHART_PATH;
+    if (!raw) return path.resolve(repoRoot, 'infrastructure/helm/service-chart');
+    return path.isAbsolute(raw) ? raw : path.resolve(repoRoot, raw);
+  },
+  getDeployTimeoutSeconds: () => getEnv().DEPLOY_TIMEOUT_SECONDS,
 };
 
 registerWorkflowSteps('deploy', createDeploySteps(deployDeps));
-registerWorkflowSteps('rollback', createRollbackSteps(deployDeps));
 registerWorkflowSteps('undeploy', createUndeploySteps({ getK8sRunner: getWorkerK8sRunner }));
 
 export interface WorkerOptions {
