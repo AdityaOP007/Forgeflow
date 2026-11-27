@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../');
 const envPath = path.join(repoRoot, 'apps/api/.env');
-dotenv.config({ path: envPath, override: true });
+dotenv.config({ path: envPath });
 console.log(`Loaded env from ${envPath}`);
 
 import { loadEnv } from './config/env.js';

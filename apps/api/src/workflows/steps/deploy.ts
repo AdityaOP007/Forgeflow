@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import { PUBLISH_JOB_NAME } from '@forgeflow/shared-types';
 import { db } from '../../db/client.js';
 import { ciRuns, deployments, environments } from '../../db/schema.js';
@@ -466,18 +466,24 @@ export function createDeploySteps(deps: DeployStepsDeps): Step[] {
           .where(eq(environments.id, environmentId));
 
         if (rollbackOf) {
-          const priorSucceeded = await db
+          // Only the previously current succeeded deployment becomes rolled_back;
+          // the rollback target stays succeeded and can be rolled back to again.
+          const [previouslyCurrent] = await db
             .select({ id: deployments.id })
             .from(deployments)
             .where(
               and(
                 eq(deployments.environment_id, environmentId),
                 eq(deployments.status, 'succeeded'),
-                ne(deployments.id, deploymentId)
+                ne(deployments.id, deploymentId),
+                ne(deployments.id, rollbackOf)
               )
-            );
-          for (const prev of priorSucceeded) {
-            await transitionDeployment(db, prev.id, 'succeeded', 'rolled_back');
+            )
+            .orderBy(desc(deployments.created_at))
+            .limit(1);
+
+          if (previouslyCurrent) {
+            await transitionDeployment(db, previouslyCurrent.id, 'succeeded', 'rolled_back');
           }
         }
 

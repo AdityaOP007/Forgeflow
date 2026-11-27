@@ -45,6 +45,8 @@ cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
 ```
 
+> **Environment Precedence**: Process environment variables take precedence over `apps/api/.env` in both the API (`apps/api/src/index.ts`) and the worker (`apps/api/src/worker/index.ts`), because `dotenv.config` is called without `override: true`. This allows operators, CI pipelines, and test runs to override settings (such as `DEPLOY_TIMEOUT_SECONDS`, `RECONCILE_INTERVAL_MS`, `GITHUB_WEBHOOK_SECRET`, or credentials) per process without modifying `apps/api/.env`.
+
 ### 3. Install Dependencies
 
 ```bash

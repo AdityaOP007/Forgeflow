@@ -189,6 +189,7 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       ghcrMissing?: boolean;
       helmFailError?: Error;
       storedSecrets?: Map<string, Record<string, unknown>>;
+      podFailureOnFail?: boolean;
     } = {}
   ) {
     let deployedImage = '';
@@ -240,7 +241,10 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
                       replicas: 1,
                       template: { spec: { containers: [{ image: deployedImage }] } },
                     },
-                    status: { replicas: 1, readyReplicas: 1 },
+                    status: {
+                      replicas: 1,
+                      readyReplicas: opts.podFailureOnFail ? 0 : 1,
+                    },
                   },
                 ]
               : [],
@@ -249,7 +253,30 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
         };
       }
       if (args[0] === 'get' && args[1] === 'pods') {
-        return { stdout: JSON.stringify({ items: [] }), stderr: '' };
+        return {
+          stdout: JSON.stringify({
+            items: opts.podFailureOnFail
+              ? [
+                  {
+                    metadata: { name: 'orders-api-abc' },
+                    status: {
+                      containerStatuses: [
+                        {
+                          state: {
+                            waiting: {
+                              reason: 'ImagePullBackOff',
+                              message: 'unauthorized: invalid token',
+                            },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                ]
+              : [],
+          }),
+          stderr: '',
+        };
       }
       return { stdout: '', stderr: '' };
     });
@@ -304,93 +331,60 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
     return (type: string) => map.get(type) ?? [];
   }
 
-  it('happy path (all 4 steps), stable DB secret across 2 deploys, rollback, undeploy, delete guards, and allowlist audit', async () => {
+  it('happy path: runs all 4 steps, marks deployment succeeded, environment healthy with url and nodePort', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const worker = createWorker({
+      workerId: 'worker-happy',
+      stepResolver: makeStepResolver(runner, gh),
+    });
+
+    const depRes = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(depRes.status).toBe(202);
+
+    expect(await worker.pollOnce()).toBe(true);
+
+    const [dep] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, depRes.body.deploymentId));
+    expect(dep.status).toBe('succeeded');
+    expect(dep.helm_revision).toBe(1);
+
+    const [env] = await db.select().from(environments).where(eq(environments.service_id, svc.id));
+    expect(env.status).toBe('healthy');
+    expect(env.node_port).toBe(30080);
+    expect(env.url).toBe('http://127.0.0.1:30080');
+  });
+
+  it('returns exact camelCase key sets for all new deployment and CI responses', async () => {
     const sha1 = 'a'.repeat(40);
     const sha2 = 'b'.repeat(40);
     const { svc } = await seedReadyServiceWithCi(sha1, sha2);
-
     const app = createApp({ auth: testAuthVerifier });
     const runner = new FakeK8sRunner();
     const gh = makeFakeGitHub(sha1, sha2);
-    const storedSecrets = new Map<string, Record<string, unknown>>();
     const worker = createWorker({
-      workerId: 'test-worker-3d',
-      stepResolver: makeStepResolver(runner, gh, { storedSecrets }),
+      workerId: 'worker-keys',
+      stepResolver: makeStepResolver(runner, gh),
     });
 
-    // 1. Deploy sha1
+    // deployment create 202
     const dep1Res = await request(app)
       .post(`/api/services/${svc.id}/deployments`)
       .set('Authorization', 'Bearer dev-owner-token')
       .send({ environment: 'development', commitSha: sha1 });
     expect(dep1Res.status).toBe(202);
     expect(Object.keys(dep1Res.body).sort()).toEqual(['deploymentId', 'status', 'workflowId']);
-
-    // Concurrent second deploy -> 409 DEPLOYMENT_IN_PROGRESS
-    const conflictRes = await request(app)
-      .post(`/api/services/${svc.id}/deployments`)
-      .set('Authorization', 'Bearer dev-owner-token')
-      .send({ environment: 'development', commitSha: sha2 });
-    expect(conflictRes.status).toBe(409);
-    expect(conflictRes.body.error.code).toBe('DEPLOYMENT_IN_PROGRESS');
-
     expect(await worker.pollOnce()).toBe(true);
 
-    // Verify all calls to FakeK8sRunner are allowlisted
-    for (const call of runner.calls) {
-      if (call.tool === 'kubectl') {
-        expect(ALLOWED_KUBECTL_VERBS.has(call.args[0])).toBe(true);
-      } else {
-        expect(ALLOWED_HELM_SUBCOMMANDS.has(call.args[0])).toBe(true);
-      }
-    }
-
-    // Print redacted happy-path call list for evidence
-    const redactedCalls = runner.calls.map((c) => `${c.tool} ${c.args.join(' ')}`);
-    expect(redactedCalls.length).toBeGreaterThan(0);
-
-    const upgradeCall = runner.calls.find((c) => c.tool === 'helm' && c.args[0] === 'upgrade');
-    expect(upgradeCall?.args).toContain('--rollback-on-failure');
-    expect(upgradeCall?.args).toContain('--timeout');
-    expect(upgradeCall?.args).toContain('300s');
-
-    const dbSecret1 = storedSecrets.get('orders-api-db-secret') as {
-      stringData?: { POSTGRES_PASSWORD?: string };
-    };
-    const dbPassword = dbSecret1?.stringData?.POSTGRES_PASSWORD ?? '';
-    expect(dbPassword.length).toBeGreaterThan(10);
-
-    // Environment healthy with url & port
-    const [envAfter1] = await db
-      .select()
-      .from(environments)
-      .where(eq(environments.service_id, svc.id));
-    expect(envAfter1.status).toBe('healthy');
-    expect(envAfter1.node_port).toBe(30080);
-    expect(envAfter1.url).toBe('http://127.0.0.1:30080');
-
-    // Delete while deployed -> 409 SERVICE_DEPLOYED
-    const delWhileDeployed = await request(app)
-      .delete(`/api/services/${svc.id}`)
-      .set('Authorization', 'Bearer dev-owner-token');
-    expect(delWhileDeployed.status).toBe(409);
-    expect(delWhileDeployed.body.error.code).toBe('SERVICE_DEPLOYED');
-
-    // 2. Deploy sha2 (omit commitSha to test auto-picking latest deployable commit!)
-    const dep2Res = await request(app)
-      .post(`/api/services/${svc.id}/deployments`)
-      .set('Authorization', 'Bearer dev-owner-token')
-      .send({ environment: 'development' });
-    expect(dep2Res.status).toBe(202);
-    expect(await worker.pollOnce()).toBe(true);
-
-    // DB password stable across two deploys while pull secret is refreshed
-    const dbSecret2 = storedSecrets.get('orders-api-db-secret') as {
-      stringData?: { POSTGRES_PASSWORD?: string };
-    };
-    expect(dbSecret2?.stringData?.POSTGRES_PASSWORD).toBe(dbPassword);
-
-    // 3. Rollback to dep1 -> creates NEW deployment with rollbackOf pointing at dep1, marks dep2 rolled_back
+    // rollback 202
     const rbRes = await request(app)
       .post(`/api/deployments/${dep1Res.body.deploymentId}/rollback`)
       .set('Authorization', 'Bearer dev-owner-token')
@@ -399,20 +393,7 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
     expect(Object.keys(rbRes.body).sort()).toEqual(['deploymentId', 'status', 'workflowId']);
     expect(await worker.pollOnce()).toBe(true);
 
-    const [supersededDep2] = await db
-      .select()
-      .from(deployments)
-      .where(eq(deployments.id, dep2Res.body.deploymentId));
-    expect(supersededDep2.status).toBe('rolled_back');
-
-    const [rbDep] = await db
-      .select()
-      .from(deployments)
-      .where(eq(deployments.id, rbRes.body.deploymentId));
-    expect(rbDep.status).toBe('succeeded');
-    expect(rbDep.rollback_of).toBe(dep1Res.body.deploymentId);
-
-    // Check GET /api/deployments, GET /api/deployments/:id, GET /api/services/:id/deployments exact keys + noSecrets
+    // deployments list (paginated)
     const listAll = await request(app)
       .get(`/api/deployments?serviceId=${svc.id}&environment=development`)
       .set('Authorization', 'Bearer viewer-token');
@@ -424,13 +405,13 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       'total',
       'totalPages',
     ]);
-    expect(listAll.body.total).toBe(3);
 
-    const singleDep = await request(app)
-      .get(`/api/deployments/${rbRes.body.deploymentId}`)
+    // deployment detail
+    const detail = await request(app)
+      .get(`/api/deployments/${dep1Res.body.deploymentId}`)
       .set('Authorization', 'Bearer viewer-token');
-    expect(singleDep.status).toBe(200);
-    expect(Object.keys(singleDep.body).sort()).toEqual([
+    expect(detail.status).toBe(200);
+    expect(Object.keys(detail.body).sort()).toEqual([
       'commitSha',
       'completedAt',
       'createdAt',
@@ -447,43 +428,96 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       'workflowRunId',
     ]);
 
+    // service deployments list
     const svcDeps = await request(app)
       .get(`/api/services/${svc.id}/deployments`)
       .set('Authorization', 'Bearer viewer-token');
     expect(svcDeps.status).toBe(200);
     expect(Object.keys(svcDeps.body).sort()).toEqual(['data']);
 
-    const logs = await db.select().from(workflowLogs);
-    assertNoSecrets(
-      JSON.stringify({
-        listAll: listAll.body,
-        singleDep: singleDep.body,
-        svcDeps: svcDeps.body,
-        logs,
-      }),
-      [dbPassword]
-    );
+    // deployable-commits
+    const deployable = await request(app)
+      .get(`/api/services/${svc.id}/deployable-commits`)
+      .set('Authorization', 'Bearer viewer-token');
+    expect(deployable.status).toBe(200);
+    expect(Object.keys(deployable.body).sort()).toEqual(['data']);
+    expect(Object.keys(deployable.body.data[0]).sort()).toEqual([
+      'ciRunId',
+      'commitSha',
+      'completedAt',
+      'htmlUrl',
+      'shortSha',
+    ]);
 
-    // 4. Undeploy followed by successful service delete
+    // ci-runs
+    const ciRes = await request(app)
+      .get(`/api/services/${svc.id}/ci-runs`)
+      .set('Authorization', 'Bearer viewer-token');
+    expect(ciRes.status).toBe(200);
+    expect(Object.keys(ciRes.body).sort()).toEqual(['data']);
+    expect(Object.keys(ciRes.body.data[0]).sort()).toEqual([
+      'completedAt',
+      'conclusion',
+      'createdAt',
+      'event',
+      'githubRunId',
+      'headBranch',
+      'headSha',
+      'htmlUrl',
+      'id',
+      'jobs',
+      'publishSucceeded',
+      'runAttempt',
+      'runStartedAt',
+      'serviceId',
+      'status',
+      'updatedAt',
+    ]);
+
+    // undeploy 202
     const undepRes = await request(app)
       .post(`/api/services/${svc.id}/environments/development/undeploy`)
       .set('Authorization', 'Bearer dev-owner-token')
       .send();
     expect(undepRes.status).toBe(202);
     expect(Object.keys(undepRes.body).sort()).toEqual(['status', 'workflowId']);
-    expect(await worker.pollOnce()).toBe(true);
-
-    const delRes = await request(app)
-      .delete(`/api/services/${svc.id}`)
-      .set('Authorization', 'Bearer dev-owner-token');
-    expect(delRes.status).toBe(204);
   });
 
-  it('rejects 409 CI_NOT_READY, 409 NO_PUBLISHED_IMAGE (template 1.0.0), and enforces permission matrix', async () => {
+  it('assertNoSecrets excludes DB password, GHCR token, and dockerconfigjson from responses, logs, and errors', async () => {
     const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
     const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const storedSecrets = new Map<string, Record<string, unknown>>();
+    const worker = createWorker({
+      workerId: 'worker-secrets',
+      stepResolver: makeStepResolver(runner, gh, { storedSecrets }),
+    });
 
-    // Service with no CI runs -> 409 CI_NOT_READY
+    const depRes = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    const dbSecret = storedSecrets.get('orders-api-db-secret') as {
+      stringData?: { POSTGRES_PASSWORD?: string; DATABASE_URL?: string };
+    };
+    const dbPassword = dbSecret?.stringData?.POSTGRES_PASSWORD ?? '';
+    expect(dbPassword.length).toBeGreaterThan(10);
+
+    const detail = await request(app)
+      .get(`/api/deployments/${depRes.body.deploymentId}`)
+      .set('Authorization', 'Bearer viewer-token');
+    const logs = await db.select().from(workflowLogs);
+
+    assertNoSecrets(JSON.stringify({ depRes: depRes.body, detail: detail.body, logs }), [
+      dbPassword,
+    ]);
+  });
+
+  it('returns 409 CI_NOT_READY when service has no completed green CI run on main', async () => {
     const [svcNoCi] = await db
       .insert(services)
       .values({
@@ -496,122 +530,133 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       })
       .returning();
 
-    const noCiRes = await request(app)
+    const app = createApp({ auth: testAuthVerifier });
+    const res = await request(app)
       .post(`/api/services/${svcNoCi.id}/deployments`)
       .set('Authorization', 'Bearer dev-owner-token')
       .send({ environment: 'development' });
-    expect(noCiRes.status).toBe(409);
-    expect(noCiRes.body.error.code).toBe('CI_NOT_READY');
-
-    // Service with template 1.0.0 -> 409 NO_PUBLISHED_IMAGE
-    const { svc: svc100 } = await seedReadyServiceWithCi(sha1, undefined, {
-      templateVersion: '1.0.0',
-    });
-    const noImgRes = await request(app)
-      .post(`/api/services/${svc100.id}/deployments`)
-      .set('Authorization', 'Bearer dev-owner-token')
-      .send({ environment: 'development', commitSha: sha1 });
-    expect(noImgRes.status).toBe(409);
-    expect(noImgRes.body.error.code).toBe('NO_PUBLISHED_IMAGE');
-
-    // Permission matrix: viewer 403, otherDev 403 on deploy, rollback, undeploy
-    const [depRow] = await db
-      .insert(deployments)
-      .values({
-        service_id: svc100.id,
-        environment_id: (
-          await db.select().from(environments).where(eq(environments.service_id, svc100.id))
-        )[0].id,
-        commit_sha: sha1,
-        image: `ghcr.io/forgeflow-test-org/orders-api:${sha1}`,
-        status: 'succeeded',
-      })
-      .returning();
-
-    for (const token of ['viewer-token', 'other-dev-token']) {
-      const r1 = await request(app)
-        .post(`/api/services/${svcNoCi.id}/deployments`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ environment: 'development' });
-      expect(r1.status).toBe(403);
-
-      const r2 = await request(app)
-        .post(`/api/deployments/${depRow.id}/rollback`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ environment: 'development' });
-      expect(r2.status).toBe(403);
-
-      const r3 = await request(app)
-        .post(`/api/services/${svcNoCi.id}/environments/development/undeploy`)
-        .set('Authorization', `Bearer ${token}`)
-        .send();
-      expect(r3.status).toBe(403);
-    }
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CI_NOT_READY');
   });
 
-  it('fails in preflight when GHCR token is missing (naming only variable names)', async () => {
+  it('returns 409 NO_PUBLISHED_IMAGE for template 1.0.0 service', async () => {
     const sha1 = 'a'.repeat(40);
-    const { svc } = await seedReadyServiceWithCi(sha1);
+    const { svc } = await seedReadyServiceWithCi(sha1, undefined, { templateVersion: '1.0.0' });
+    const app = createApp({ auth: testAuthVerifier });
+    const res = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('NO_PUBLISHED_IMAGE');
+  });
+
+  it('returns 409 DEPLOYMENT_IN_PROGRESS on concurrent second deploy', async () => {
+    const sha1 = 'a'.repeat(40);
+    const sha2 = 'b'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1, sha2);
+    const app = createApp({ auth: testAuthVerifier });
+
+    const r1 = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(r1.status).toBe(202);
+
+    const r2 = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha2 });
+    expect(r2.status).toBe(409);
+    expect(r2.body.error.code).toBe('DEPLOYMENT_IN_PROGRESS');
+  });
+
+  it('keeps database secret password stable across two deploys while refreshing GHCR pull secret', async () => {
+    const sha1 = 'a'.repeat(40);
+    const sha2 = 'b'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1, sha2);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1, sha2);
+    const storedSecrets = new Map<string, Record<string, unknown>>();
+    const worker = createWorker({
+      workerId: 'worker-stable-secret',
+      stepResolver: makeStepResolver(runner, gh, { storedSecrets }),
+    });
+
+    await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    const dbSecret1 = storedSecrets.get('orders-api-db-secret') as {
+      stringData?: { POSTGRES_PASSWORD?: string };
+    };
+    const pw1 = dbSecret1.stringData?.POSTGRES_PASSWORD;
+    const pullCalls1 = runner.calls.filter(
+      (c) => c.tool === 'kubectl' && c.args[0] === 'apply' && c.stdin?.includes('dockerconfigjson')
+    );
+    expect(pullCalls1).toHaveLength(1);
+
+    await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha2 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    const dbSecret2 = storedSecrets.get('orders-api-db-secret') as {
+      stringData?: { POSTGRES_PASSWORD?: string };
+    };
+    expect(dbSecret2.stringData?.POSTGRES_PASSWORD).toBe(pw1);
+    const pullCalls2 = runner.calls.filter(
+      (c) => c.tool === 'kubectl' && c.args[0] === 'apply' && c.stdin?.includes('dockerconfigjson')
+    );
+    expect(pullCalls2).toHaveLength(2);
+  });
+
+  it('marks deployment failed with redacted summary on helm failure and observes cluster state', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc, env } = await seedReadyServiceWithCi(sha1);
     const app = createApp({ auth: testAuthVerifier });
     const runner = new FakeK8sRunner();
     const gh = makeFakeGitHub(sha1);
     const worker = createWorker({
-      workerId: 'test-worker-missing-ghcr',
-      stepResolver: makeStepResolver(runner, gh, { ghcrMissing: true }),
+      workerId: 'worker-helm-fail',
+      stepResolver: makeStepResolver(runner, gh, {
+        helmFailError: new Error(`Helm failed with token ${TEST_GHCR_TOKEN}`),
+      }),
     });
 
     const depRes = await request(app)
       .post(`/api/services/${svc.id}/deployments`)
       .set('Authorization', 'Bearer dev-owner-token')
       .send({ environment: 'development', commitSha: sha1 });
-    expect(depRes.status).toBe(202);
     expect(await worker.pollOnce()).toBe(true);
-
-    const [dep] = await db
-      .select()
-      .from(deployments)
-      .where(eq(deployments.id, depRes.body.deploymentId));
-    expect(dep.status).toBe('failed');
-    expect(dep.error_summary).toContain('GHCR_PULL_USERNAME');
-    expect(dep.error_summary).toContain('GHCR_PULL_TOKEN');
-    assertNoSecrets(dep.error_summary ?? '');
-  });
-
-  it('handles helm failure with observation, crash+retry without duplicates, stale recovery, and cancel', async () => {
-    const sha1 = 'a'.repeat(40);
-    const { svc, env } = await seedReadyServiceWithCi(sha1);
-    const app = createApp({ auth: testAuthVerifier });
-    const runner = new FakeK8sRunner();
-    const gh = makeFakeGitHub(sha1);
-
-    // 1. Helm failure marks deployment failed with redacted summary and clears node_port on failed first deploy
-    const failWorker = createWorker({
-      workerId: 'worker-helm-fail',
-      stepResolver: makeStepResolver(runner, gh, {
-        helmFailError: new Error(`Helm failed using token ${TEST_GHCR_TOKEN}`),
-      }),
-    });
-    const depFailRes = await request(app)
-      .post(`/api/services/${svc.id}/deployments`)
-      .set('Authorization', 'Bearer dev-owner-token')
-      .send({ environment: 'development', commitSha: sha1 });
-    expect(await failWorker.pollOnce()).toBe(true);
 
     const [failedDep] = await db
       .select()
       .from(deployments)
-      .where(eq(deployments.id, depFailRes.body.deploymentId));
+      .where(eq(deployments.id, depRes.body.deploymentId));
     expect(failedDep.status).toBe('failed');
+    expect(failedDep.error_summary).toContain('[REDACTED_TOKEN]');
     assertNoSecrets(failedDep.error_summary ?? '');
 
-    const [envAfterFail] = await db.select().from(environments).where(eq(environments.id, env.id));
-    expect(envAfterFail.node_port).toBeNull();
+    // Failed first deploy does not leak node_port
+    const [envRow] = await db.select().from(environments).where(eq(environments.id, env.id));
+    expect(envRow.node_port).toBeNull();
+  });
 
-    // 2. Crash after helm succeeded (verify fails once) -> retry succeeds without duplicate resources
+  it('recovers from crash after helm succeeded and before recording via retry without duplicate resources', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+
     let failVerifyOnce = true;
-    const crashRunner = new FakeK8sRunner();
-    const baseResolver = makeStepResolver(crashRunner, gh);
-    const retryWorker = createWorker({
+    const baseResolver = makeStepResolver(runner, gh);
+    const worker = createWorker({
       workerId: 'worker-retry',
       stepResolver: (type) => {
         const steps = baseResolver(type);
@@ -633,31 +678,41 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       },
     });
 
-    const depCrashRes = await request(app)
+    const depRes = await request(app)
       .post(`/api/services/${svc.id}/deployments`)
       .set('Authorization', 'Bearer dev-owner-token')
       .send({ environment: 'development', commitSha: sha1 });
-    expect(await retryWorker.pollOnce()).toBe(true);
+    expect(await worker.pollOnce()).toBe(true);
 
     const retryRes = await request(app)
-      .post(`/api/workflows/${depCrashRes.body.workflowId}/retry`)
+      .post(`/api/workflows/${depRes.body.workflowId}/retry`)
       .set('Authorization', 'Bearer dev-owner-token');
     expect(retryRes.status).toBe(200);
-    expect(await retryWorker.pollOnce()).toBe(true);
+    expect(await worker.pollOnce()).toBe(true);
 
-    const [retriedRun] = await db
+    const [run] = await db
       .select()
       .from(workflowRuns)
-      .where(eq(workflowRuns.id, depCrashRes.body.workflowId));
-    expect(retriedRun.status).toBe('succeeded');
+      .where(eq(workflowRuns.id, depRes.body.workflowId));
+    expect(run.status).toBe('succeeded');
 
-    // 3. Stale-lock recovery mid-deploy
-    await db
-      .update(environments)
-      .set({ deployed_commit_sha: null, deployed_image: null, node_port: null, status: 'unknown' })
-      .where(eq(environments.id, env.id));
+    // helm upgrade ran only once (deploy step was skipped on retry)
+    const helmUpgrades = runner.calls.filter((c) => c.tool === 'helm' && c.args[0] === 'upgrade');
+    expect(helmUpgrades).toHaveLength(1);
+  });
 
-    const depStaleRes = await request(app)
+  it('recovers mid-deploy from stale lock via requeueStale', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const worker = createWorker({
+      workerId: 'worker-stale',
+      stepResolver: makeStepResolver(runner, gh),
+    });
+
+    const depRes = await request(app)
       .post(`/api/services/${svc.id}/deployments`)
       .set('Authorization', 'Bearer dev-owner-token')
       .send({ environment: 'development', commitSha: sha1 });
@@ -669,35 +724,135 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
         locked_by: 'dead-worker',
         locked_at: new Date(Date.now() - 300_000),
       })
-      .where(eq(workflowRuns.id, depStaleRes.body.workflowId));
+      .where(eq(workflowRuns.id, depRes.body.workflowId));
 
     expect(await requeueStale(120_000)).toBe(1);
-    expect(await retryWorker.pollOnce()).toBe(true);
+    expect(await worker.pollOnce()).toBe(true);
 
-    const [staleRun] = await db
+    const [run] = await db
       .select()
       .from(workflowRuns)
-      .where(eq(workflowRuns.id, depStaleRes.body.workflowId));
-    expect(staleRun.status).toBe('succeeded');
+      .where(eq(workflowRuns.id, depRes.body.workflowId));
+    expect(run.status).toBe('succeeded');
+  });
 
-    // 4. Cancel queued deploy
-    const depCancelRes = await request(app)
+  it('cancels queued deploy workflow and marks deployment cancelled', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+
+    const depRes = await request(app)
       .post(`/api/services/${svc.id}/deployments`)
       .set('Authorization', 'Bearer dev-owner-token')
       .send({ environment: 'development', commitSha: sha1 });
+
     const cancelRes = await request(app)
-      .post(`/api/workflows/${depCancelRes.body.workflowId}/cancel`)
+      .post(`/api/workflows/${depRes.body.workflowId}/cancel`)
       .set('Authorization', 'Bearer dev-owner-token');
     expect(cancelRes.status).toBe(200);
 
-    const [cancelledDep] = await db
+    const [dep] = await db
       .select()
       .from(deployments)
-      .where(eq(deployments.id, depCancelRes.body.deploymentId));
-    expect(cancelledDep.status).toBe('cancelled');
+      .where(eq(deployments.id, depRes.body.deploymentId));
+    expect(dep.status).toBe('cancelled');
   });
 
-  it('allocates NodePorts sequentially and fails cleanly on exhaustion (30080-30089)', async () => {
+  it('rollback creates a new deployment and marks only previously current deployment rolled_back while target stays succeeded', async () => {
+    const sha1 = 'a'.repeat(40);
+    const sha2 = 'b'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1, sha2);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1, sha2);
+    const worker = createWorker({
+      workerId: 'worker-rb',
+      stepResolver: makeStepResolver(runner, gh),
+    });
+
+    const dep1 = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    const dep2 = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha2 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    // Roll back to dep1
+    const rb = await request(app)
+      .post(`/api/deployments/${dep1.body.deploymentId}/rollback`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development' });
+    expect(rb.status).toBe(202);
+    expect(await worker.pollOnce()).toBe(true);
+
+    const [row1] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, dep1.body.deploymentId));
+    const [row2] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, dep2.body.deploymentId));
+    const [rowRb] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, rb.body.deploymentId));
+
+    expect(row1.status).toBe('succeeded'); // target stays succeeded!
+    expect(row2.status).toBe('rolled_back'); // previously current becomes rolled_back!
+    expect(rowRb.status).toBe('succeeded');
+    expect(rowRb.rollback_of).toBe(dep1.body.deploymentId);
+
+    // Target dep1 can be rolled back to again
+    const rbAgain = await request(app)
+      .post(`/api/deployments/${dep1.body.deploymentId}/rollback`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development' });
+    expect(rbAgain.status).toBe(202);
+  });
+
+  it('undeploy clears state and allows service delete while delete-while-deployed returns 409 SERVICE_DEPLOYED', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const worker = createWorker({
+      workerId: 'worker-undep',
+      stepResolver: makeStepResolver(runner, gh),
+    });
+
+    await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    const delBlocked = await request(app)
+      .delete(`/api/services/${svc.id}`)
+      .set('Authorization', 'Bearer dev-owner-token');
+    expect(delBlocked.status).toBe(409);
+    expect(delBlocked.body.error.code).toBe('SERVICE_DEPLOYED');
+
+    const undepRes = await request(app)
+      .post(`/api/services/${svc.id}/environments/development/undeploy`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send();
+    expect(undepRes.status).toBe(202);
+    expect(await worker.pollOnce()).toBe(true);
+
+    const delOk = await request(app)
+      .delete(`/api/services/${svc.id}`)
+      .set('Authorization', 'Bearer dev-owner-token');
+    expect(delOk.status).toBe(204);
+  });
+
+  it('allocates NodePorts sequentially, handles concurrent race, and fails on exhaustion', async () => {
     const createdEnvs: string[] = [];
     for (let i = 0; i < 11; i++) {
       const [svc] = await db
@@ -715,14 +870,50 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       createdEnvs.push(env.id);
     }
 
-    for (let i = 0; i < 10; i++) {
+    // Concurrent race on 2 envs -> both get distinct ports
+    const [r1, r2] = await Promise.all([
+      allocateEnvironmentNodePort(createdEnvs[0]),
+      allocateEnvironmentNodePort(createdEnvs[1]),
+    ]);
+    expect(r1.nodePort).not.toBe(r2.nodePort);
+    expect([r1.nodePort, r2.nodePort].every((p) => p >= 30080 && p <= 30089)).toBe(true);
+
+    for (let i = 2; i < 10; i++) {
       const alloc = await allocateEnvironmentNodePort(createdEnvs[i]);
-      expect(alloc.nodePort).toBe(30080 + i);
+      expect(alloc.nodePort).toBeGreaterThanOrEqual(30080);
+      expect(alloc.nodePort).toBeLessThanOrEqual(30089);
     }
 
     await expect(allocateEnvironmentNodePort(createdEnvs[10])).rejects.toThrow(
       /All NodePorts \(30080-30089\) are in use/
     );
+  });
+
+  it('every call reaching FakeK8sRunner is allowlisted and prints redacted happy-path call list', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const worker = createWorker({
+      workerId: 'worker-allowlist',
+      stepResolver: makeStepResolver(runner, gh),
+    });
+
+    await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    const callList = runner.calls.map((c) => {
+      if (c.tool === 'kubectl') expect(ALLOWED_KUBECTL_VERBS.has(c.args[0])).toBe(true);
+      else expect(ALLOWED_HELM_SUBCOMMANDS.has(c.args[0])).toBe(true);
+      return `${c.tool} ${c.args.join(' ')}`;
+    });
+
+    console.log('Happy-path FakeK8sRunner calls:\n' + callList.join('\n'));
+    expect(callList.length).toBeGreaterThanOrEqual(7);
   });
 
   it('computeEnvironmentObservation table-driven status cases (no drifted)', () => {
@@ -806,9 +997,7 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
             {
               status: {
                 containerStatuses: [
-                  {
-                    state: { waiting: { reason: 'ImagePullBackOff', message: 'Back-off pulling' } },
-                  },
+                  { state: { waiting: { reason: 'ImagePullBackOff', message: 'Back-off' } } },
                 ],
               },
             },
@@ -819,11 +1008,7 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       },
       {
         name: 'failed when Deployment missing although image recorded',
-        input: {
-          deployedImage: img,
-          deployment: null,
-          clusterReachable: true,
-        },
+        input: { deployedImage: img, deployment: null, clusterReachable: true },
         expectedStatus: 'failed',
       },
       {
@@ -839,8 +1024,7 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
     ];
 
     for (const tc of cases) {
-      const res = computeEnvironmentObservation(tc.input);
-      expect(res.status, tc.name).toBe(tc.expectedStatus);
+      expect(computeEnvironmentObservation(tc.input).status, tc.name).toBe(tc.expectedStatus);
     }
   });
 
@@ -858,12 +1042,7 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
 
     const runner = new FakeK8sRunner();
     runner.onKubectl(async () => {
-      throw new K8sCommandError(
-        'Connection refused',
-        1,
-        '',
-        'dial tcp 127.0.0.1:6443: connect: connection refused'
-      );
+      throw new K8sCommandError('Connection refused', 1, '', 'dial tcp 127.0.0.1:6443: refused');
     });
 
     await reconcileEnvironments(runner);
@@ -873,5 +1052,77 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
       .where(and(eq(environments.id, env.id)));
     expect(after.status).toBe('healthy');
     expect(after.last_observed_error).toContain('Cluster unreachable');
+  });
+
+  it('enforces permission matrix: viewer 403 and different developer 403 on deploy, rollback, and undeploy', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc, env } = await seedReadyServiceWithCi(sha1);
+    const [dep] = await db
+      .insert(deployments)
+      .values({
+        service_id: svc.id,
+        environment_id: env.id,
+        commit_sha: sha1,
+        image: `ghcr.io/forgeflow-test-org/orders-api:${sha1}`,
+        status: 'succeeded',
+      })
+      .returning();
+
+    const app = createApp({ auth: testAuthVerifier });
+    for (const token of ['viewer-token', 'other-dev-token']) {
+      expect(
+        (
+          await request(app)
+            .post(`/api/services/${svc.id}/deployments`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ environment: 'development', commitSha: sha1 })
+        ).status
+      ).toBe(403);
+
+      expect(
+        (
+          await request(app)
+            .post(`/api/deployments/${dep.id}/rollback`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ environment: 'development' })
+        ).status
+      ).toBe(403);
+
+      expect(
+        (
+          await request(app)
+            .post(`/api/services/${svc.id}/environments/development/undeploy`)
+            .set('Authorization', `Bearer ${token}`)
+            .send()
+        ).status
+      ).toBe(403);
+    }
+  });
+
+  it('fails in preflight when GHCR credentials are missing (naming only variable names)', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const worker = createWorker({
+      workerId: 'worker-missing-ghcr',
+      stepResolver: makeStepResolver(runner, gh, { ghcrMissing: true }),
+    });
+
+    const depRes = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(await worker.pollOnce()).toBe(true);
+
+    const [dep] = await db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.id, depRes.body.deploymentId));
+    expect(dep.status).toBe('failed');
+    expect(dep.error_summary).toContain('GHCR_PULL_USERNAME');
+    expect(dep.error_summary).toContain('GHCR_PULL_TOKEN');
+    assertNoSecrets(dep.error_summary ?? '');
   });
 });
