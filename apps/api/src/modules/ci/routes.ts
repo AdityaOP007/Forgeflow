@@ -1,11 +1,15 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import type { ListCiRunsResponse, SyncCiRunsResponse } from '@forgeflow/shared-types';
+import type {
+  ListCiRunsResponse,
+  ListDeployableCommitsResponse,
+  SyncCiRunsResponse,
+} from '@forgeflow/shared-types';
 import { requireRole } from '../../middleware/requireRole.js';
 import { getGitHubConfig } from '../../config/env.js';
 import { RealGitHubClient } from '../../github/client.js';
 import type { GitHubClient } from '../../github/types.js';
-import { listServiceCiRuns, syncServiceCiRuns } from './service.js';
+import { listDeployableCommits, listServiceCiRuns, syncServiceCiRuns } from './service.js';
 
 export interface CiRouterOptions {
   createGitHubClient?: () => { client: GitHubClient; org: string } | null;
@@ -80,6 +84,25 @@ export function createCiRouter(options: CiRouterOptions = {}): Router {
     }
   );
 
+  // GET /api/services/:id/deployable-commits
+  router.get(
+    '/:id/deployable-commits',
+    async (req: Request, res: Response<ListDeployableCommitsResponse>, next: NextFunction) => {
+      try {
+        const commits = await listDeployableCommits(req.params.id);
+        res.json({ data: commits });
+      } catch (err) {
+        const httpErr = err as HttpError;
+        if (httpErr.statusCode === 404) {
+          res.status(404).json({
+            error: { code: 'NOT_FOUND', message: httpErr.message },
+          } as unknown as ListDeployableCommitsResponse);
+          return;
+        }
+        next(err);
+      }
+    }
+  );
+
   return router;
 }
-

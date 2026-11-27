@@ -147,6 +147,7 @@ export interface DashboardSummary {
   unknownCount: number;
   activeDeployments: number;
   failedBuilds: number;
+  failedWorkflows: number;
   activeWorkflows: number;
 }
 
@@ -248,6 +249,18 @@ export interface ListCiRunsResponse {
 export interface SyncCiRunsResponse {
   data: CiRunItem[];
   synced: number;
+}
+
+export interface DeployableCommitItem {
+  commitSha: string;
+  shortSha: string;
+  ciRunId: string;
+  htmlUrl: string | null;
+  completedAt: string;
+}
+
+export interface ListDeployableCommitsResponse {
+  data: DeployableCommitItem[];
 }
 
 export interface DeploymentItem {

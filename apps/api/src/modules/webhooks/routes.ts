@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import express, { Router } from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { db } from '../../db/client.js';
 import { ciRuns, services, webhookDeliveries } from '../../db/schema.js';
 import { and, eq, sql } from 'drizzle-orm';
@@ -12,8 +13,11 @@ export interface WebhooksRouterOptions {
   getWebhookSecret?: () => string | undefined;
 }
 
+const MAX_WEBHOOK_BYTES = 256 * 1024; // 256 kb
+
 /**
- * Verifies GitHub's X-Hub-Signature-256 header using HMAC-SHA256 and timing-safe comparison.
+ * Verifies GitHub's X-Hub-Signature-256 header using HMAC-SHA256 and timing-safe comparison
+ * after an explicit byte-length check.
  */
 export function verifyGitHubSignature(
   rawBody: Buffer,
@@ -120,12 +124,28 @@ export function createWebhooksRouter(options: WebhooksRouterOptions = {}): Route
   const router = Router();
   const getWebhookSecret = options.getWebhookSecret ?? (() => getEnv().GITHUB_WEBHOOK_SECRET);
 
+  // Separate rate limit for webhooks: 60 requests per minute
+  const webhookLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many webhook requests, please try again later',
+      },
+    },
+  });
+
+  const rawJsonParser = express.raw({ type: 'application/json', limit: MAX_WEBHOOK_BYTES });
+
   router.post(
     '/github',
-    express.raw({ type: 'application/json', limit: '1mb' }),
-    async (req: Request, res: Response) => {
-      const secret = getWebhookSecret();
-      if (!secret) {
+    webhookLimiter,
+    // 1. Secret configuration & Content-Type check before body parsing
+    (req: Request, res: Response, next: NextFunction) => {
+      if (!getWebhookSecret()) {
         res.status(503).json({
           error: {
             code: 'WEBHOOK_NOT_CONFIGURED',
@@ -134,11 +154,42 @@ export function createWebhooksRouter(options: WebhooksRouterOptions = {}): Route
         });
         return;
       }
-
+      if (!req.is('application/json')) {
+        res.status(415).json({
+          error: {
+            code: 'UNSUPPORTED_MEDIA_TYPE',
+            message: 'Content-Type must be application/json',
+          },
+        });
+        return;
+      }
+      rawJsonParser(req, res, (err?: unknown) => {
+        if (err) {
+          const status =
+            (err as { status?: number; statusCode?: number })?.status ??
+            (err as { statusCode?: number })?.statusCode;
+          if (status === 413 || (err as { type?: string })?.type === 'entity.too.large') {
+            res.status(413).json({
+              error: {
+                code: 'PAYLOAD_TOO_LARGE',
+                message: 'Webhook payload exceeds 256kb limit',
+              },
+            });
+            return;
+          }
+          next(err);
+          return;
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response) => {
+      const secret = getWebhookSecret()!;
       const rawBody = Buffer.isBuffer(req.body)
         ? req.body
-        : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {}));
+        : Buffer.from(typeof req.body === 'string' ? req.body : '');
 
+      // 2. Verify HMAC-SHA256 signature BEFORE any database access
       const signature = req.header('x-hub-signature-256');
       if (!verifyGitHubSignature(rawBody, signature, secret)) {
         res.status(401).json({
@@ -174,7 +225,7 @@ export function createWebhooksRouter(options: WebhooksRouterOptions = {}): Route
 
       const repoObj = payload.repository as { html_url?: string; full_name?: string } | undefined;
 
-      // Idempotency guard via unique delivery_id
+      // 3. Idempotency guard via unique delivery_id
       const inserted = await db
         .insert(webhookDeliveries)
         .values({
@@ -211,10 +262,30 @@ export function createWebhooksRouter(options: WebhooksRouterOptions = {}): Route
           const runAttempt = run.run_attempt ?? 1;
           const status = run.status ?? 'queued';
           const runStartedAt = run.run_started_at ?? run.created_at;
+          const incomingUpdatedAt = run.updated_at ? new Date(run.updated_at) : new Date();
           const completedAt =
             status === 'completed'
               ? new Date(run.updated_at ? Date.parse(run.updated_at) : Date.now())
               : null;
+
+          // Older-updated_at-never-overwrites-newer guard
+          const [existing] = await db
+            .select({ id: ciRuns.id, updated_at: ciRuns.updated_at })
+            .from(ciRuns)
+            .where(
+              and(
+                eq(ciRuns.service_id, svc.id),
+                eq(ciRuns.github_run_id, run.id),
+                eq(ciRuns.run_attempt, runAttempt)
+              )
+            )
+            .limit(1);
+
+          if (existing && existing.updated_at > incomingUpdatedAt) {
+            await markDelivery(deliveryId, 'processed');
+            res.status(200).json({ ok: true, stale: true });
+            return;
+          }
 
           await db
             .insert(ciRuns)
@@ -231,7 +302,7 @@ export function createWebhooksRouter(options: WebhooksRouterOptions = {}): Route
               jobs: [],
               run_started_at: runStartedAt ? new Date(runStartedAt) : null,
               completed_at: completedAt,
-              updated_at: new Date(),
+              updated_at: incomingUpdatedAt,
             })
             .onConflictDoUpdate({
               target: [ciRuns.service_id, ciRuns.github_run_id, ciRuns.run_attempt],
@@ -244,8 +315,9 @@ export function createWebhooksRouter(options: WebhooksRouterOptions = {}): Route
                 html_url: run.html_url ?? null,
                 run_started_at: runStartedAt ? new Date(runStartedAt) : null,
                 completed_at: completedAt,
-                updated_at: new Date(),
+                updated_at: incomingUpdatedAt,
               },
+              where: sql`${ciRuns.updated_at} <= ${incomingUpdatedAt}`,
             });
 
           await markDelivery(deliveryId, 'processed');

@@ -14,7 +14,7 @@ import { executeWorkflow, type Step } from '../workflows/executor.js';
 import { transitionRun } from '../workflows/state-machine.js';
 import { createScaffoldSteps } from '../workflows/steps/scaffold.js';
 import { RealGitHubClient } from '../github/client.js';
-import { syncAllServicesCiRuns } from '../modules/ci/service.js';
+import { hasInProgressCiRuns, syncAllServicesCiRuns } from '../modules/ci/service.js';
 import { db } from '../db/client.js';
 
 // Ensure environment is validated
@@ -115,19 +115,35 @@ export function createWorker(options: WorkerOptions = {}) {
       }
     }, 30000);
 
-    // Periodic CI status sync when GitHub App is configured
-    const ciSyncIntervalMs = env.CI_SYNC_INTERVAL_MS;
-    const runCiSync = async () => {
-      const cfg = getGitHubConfig();
-      if (!cfg.configured || !cfg.config) return;
+    // Periodic CI status sync when GitHub App is configured:
+    // Uses 15s while any run is in progress, otherwise CI_SYNC_INTERVAL_MS (default 60s), with ±15% jitter.
+    const scheduleNextCiSync = async () => {
+      if (isShuttingDown || !isRunning) return;
+      let inProgress = false;
       try {
-        const client = new RealGitHubClient(cfg.config);
-        await syncAllServicesCiRuns(client, cfg.config.org);
-      } catch (err) {
-        console.error(`[Worker ${workerId}] Periodic CI sync failed:`, err);
+        inProgress = await hasInProgressCiRuns();
+      } catch {
+        inProgress = false;
       }
+      const baseMs = inProgress
+        ? Math.min(15000, env.CI_SYNC_INTERVAL_MS)
+        : env.CI_SYNC_INTERVAL_MS;
+      const jitter = baseMs * (0.85 + Math.random() * 0.3);
+      ciSyncTimer = setTimeout(async () => {
+        if (isShuttingDown || !isRunning) return;
+        const cfg = getGitHubConfig();
+        if (cfg.configured && cfg.config) {
+          try {
+            const client = new RealGitHubClient(cfg.config);
+            await syncAllServicesCiRuns(client, cfg.config.org);
+          } catch (err) {
+            console.error(`[Worker ${workerId}] Periodic CI sync failed:`, err);
+          }
+        }
+        void scheduleNextCiSync();
+      }, Math.round(jitter));
     };
-    ciSyncTimer = setInterval(runCiSync, ciSyncIntervalMs);
+    void scheduleNextCiSync();
 
     // Main poll loop (one run at a time)
     while (isRunning && !isShuttingDown) {
@@ -156,7 +172,7 @@ export function createWorker(options: WorkerOptions = {}) {
       staleTimer = null;
     }
     if (ciSyncTimer) {
-      clearInterval(ciSyncTimer);
+      clearTimeout(ciSyncTimer);
       ciSyncTimer = null;
     }
 

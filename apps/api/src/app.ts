@@ -32,6 +32,10 @@ export function createApp({ auth, webOrigin, integrations, services, webhooks }:
   // Security hardening
   app.use(helmet());
 
+  // Public webhook routes (mounted before cors() and express.json() so there are no CORS headers
+  // and raw body bytes are preserved for HMAC verification)
+  app.use('/api/webhooks', createWebhooksRouter(webhooks));
+
   // CORS limited to web origin
   const origin = webOrigin || process.env.WEB_ORIGIN || 'http://localhost:5173';
   app.use(
@@ -40,9 +44,6 @@ export function createApp({ auth, webOrigin, integrations, services, webhooks }:
       credentials: true,
     })
   );
-
-  // Public webhook routes (mounted before express.json so raw body is preserved for HMAC verification)
-  app.use('/api/webhooks', createWebhooksRouter(webhooks));
 
   // JSON body parser with size limit
   app.use(express.json({ limit: '100kb' }));

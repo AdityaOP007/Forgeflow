@@ -2,8 +2,8 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import type { DashboardSummary } from '@forgeflow/shared-types';
 import { db } from '../../db/client.js';
-import { services, environments, workflowRuns } from '../../db/schema.js';
-import { count, eq, and, gte, inArray } from 'drizzle-orm';
+import { services, environments, workflowRuns, ciRuns } from '../../db/schema.js';
+import { count, eq, and, gte, inArray, sql } from 'drizzle-orm';
 
 export const dashboardRouter = Router();
 
@@ -60,9 +60,24 @@ dashboardRouter.get(
         .from(workflowRuns)
         .where(inArray(workflowRuns.status, ['queued', 'running']));
 
-      // Failed builds in last 24h
+      // Failed builds in last 24h (completed ci_runs with conclusion failure or timed_out)
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const [{ value: failedBuilds }] = await db
+        .select({ value: count() })
+        .from(ciRuns)
+        .where(
+          and(
+            eq(ciRuns.status, 'completed'),
+            inArray(ciRuns.conclusion, ['failure', 'timed_out']),
+            gte(
+              sql`COALESCE(${ciRuns.completed_at}, ${ciRuns.updated_at}, ${ciRuns.created_at})`,
+              twentyFourHoursAgo
+            )
+          )
+        );
+
+      // Failed workflows in last 24h
+      const [{ value: failedWorkflows }] = await db
         .select({ value: count() })
         .from(workflowRuns)
         .where(
@@ -76,6 +91,7 @@ dashboardRouter.get(
         unknownCount,
         activeDeployments: Number(activeDeployments),
         failedBuilds: Number(failedBuilds),
+        failedWorkflows: Number(failedWorkflows),
         activeWorkflows: Number(activeWorkflows),
       });
     } catch (err) {

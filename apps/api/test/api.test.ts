@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { app, testUsers, cleanTables } from './setup.js';
 import { db, pool } from '../src/db/client.js';
-import { users, services, environments, workflowRuns, auditLogs } from '../src/db/schema.js';
+import {
+  users,
+  services,
+  environments,
+  workflowRuns,
+  auditLogs,
+  ciRuns,
+} from '../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
 import { localUserAuthVerifier, LOCAL_ADMIN_CLERK_ID } from '../src/middleware/auth.js';
@@ -532,11 +539,22 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
         unknownCount: 0,
         activeDeployments: 0,
         failedBuilds: 0,
+        failedWorkflows: 0,
         activeWorkflows: 0,
       });
+      expect(Object.keys(res.body).sort()).toEqual([
+        'activeDeployments',
+        'activeWorkflows',
+        'failedBuilds',
+        'failedWorkflows',
+        'healthyCount',
+        'totalServices',
+        'unhealthyCount',
+        'unknownCount',
+      ]);
     });
 
-    it('returns accurate counts with services, environments, and workflow runs', async () => {
+    it('returns accurate counts with services, environments, workflow runs, and ci_runs', async () => {
       await cleanTables();
       // Re-seed users
       const [dev] = await db
@@ -574,7 +592,7 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
         { service_id: svc2.id, name: 'production', status: 'failed' },
       ]);
 
-      // Attach workflow runs: 1 running deployment, 1 failed build within 24h
+      // Attach workflow runs: 1 running deployment, 1 failed workflow within 24h
       await db.insert(workflowRuns).values([
         {
           service_id: svc1.id,
@@ -590,6 +608,50 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
         },
       ]);
 
+      // Attach ci_runs: 1 failed, 1 timed_out within 24h, 1 failed older than 24h, 1 succeeded
+      const now = new Date();
+      const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      await db.insert(ciRuns).values([
+        {
+          service_id: svc2.id,
+          github_run_id: 1,
+          run_attempt: 1,
+          head_sha: 'a'.repeat(40),
+          status: 'completed',
+          conclusion: 'failure',
+          completed_at: now,
+        },
+        {
+          service_id: svc2.id,
+          github_run_id: 2,
+          run_attempt: 1,
+          head_sha: 'b'.repeat(40),
+          status: 'completed',
+          conclusion: 'timed_out',
+          completed_at: now,
+        },
+        {
+          service_id: svc2.id,
+          github_run_id: 3,
+          run_attempt: 1,
+          head_sha: 'c'.repeat(40),
+          status: 'completed',
+          conclusion: 'failure',
+          completed_at: twoDaysAgo,
+          updated_at: twoDaysAgo,
+          created_at: twoDaysAgo,
+        },
+        {
+          service_id: svc1.id,
+          github_run_id: 4,
+          run_attempt: 1,
+          head_sha: 'd'.repeat(40),
+          status: 'completed',
+          conclusion: 'success',
+          completed_at: now,
+        },
+      ]);
+
       const res = await request(app)
         .get('/api/dashboard/summary')
         .set('Authorization', 'Bearer dev-owner-token');
@@ -600,9 +662,11 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
         unhealthyCount: 1,
         unknownCount: 0,
         activeDeployments: 1,
-        failedBuilds: 1,
+        failedBuilds: 2,
+        failedWorkflows: 1,
         activeWorkflows: 1,
       });
+      expect(JSON.stringify(res.body)).not.toMatch(/BEGIN.*PRIVATE KEY|ghs_|ghp_|github_pat_/);
     });
   });
 
