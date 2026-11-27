@@ -19,12 +19,14 @@ import {
   deleteService,
   writeAuditLog,
 } from './service.js';
+import { createCiRouter, type CiRouterOptions } from '../ci/routes.js';
 import { db } from '../../db/client.js';
 import { services } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 
 export interface ServicesRouterOptions {
   isGitHubConfigured?: () => boolean;
+  createGitHubClient?: CiRouterOptions['createGitHubClient'];
 }
 
 interface HttpError extends Error {
@@ -231,6 +233,8 @@ export function createServicesRouter(options: ServicesRouterOptions = {}): Route
       }
     }
   );
+
+  router.use(createCiRouter({ createGitHubClient: options.createGitHubClient }));
 
   return router;
 }

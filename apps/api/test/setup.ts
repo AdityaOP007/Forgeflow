@@ -8,6 +8,9 @@ import {
   services,
   workflowSteps,
   workflowLogs,
+  deployments,
+  ciRuns,
+  webhookDeliveries,
 } from '../src/db/schema.js';
 import { createApp } from '../src/app.js';
 import type { AuthVerifier } from '../src/middleware/types.js';
@@ -79,6 +82,9 @@ export async function cleanTables() {
       `Safety guard: Refusing to clean tables because connected database '${dbName}' does not end with '_test'`
     );
   }
+  await db.delete(deployments);
+  await db.delete(ciRuns);
+  await db.delete(webhookDeliveries);
   await db.delete(workflowLogs);
   await db.delete(workflowSteps);
   await db.delete(auditLogs);

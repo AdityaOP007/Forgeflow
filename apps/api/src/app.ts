@@ -13,6 +13,7 @@ import {
   type IntegrationsRouterOptions,
 } from './modules/integrations/routes.js';
 import { workflowsRouter } from './modules/workflows/routes.js';
+import { createWebhooksRouter, type WebhooksRouterOptions } from './modules/webhooks/routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import type { AuthVerifier } from './middleware/types.js';
 
@@ -21,9 +22,10 @@ export interface AppOptions {
   webOrigin?: string;
   integrations?: IntegrationsRouterOptions;
   services?: ServicesRouterOptions;
+  webhooks?: WebhooksRouterOptions;
 }
 
-export function createApp({ auth, webOrigin, integrations, services }: AppOptions) {
+export function createApp({ auth, webOrigin, integrations, services, webhooks }: AppOptions) {
   loadEnv();
   const app = express();
 
@@ -38,6 +40,9 @@ export function createApp({ auth, webOrigin, integrations, services }: AppOption
       credentials: true,
     })
   );
+
+  // Public webhook routes (mounted before express.json so raw body is preserved for HMAC verification)
+  app.use('/api/webhooks', createWebhooksRouter(webhooks));
 
   // JSON body parser with size limit
   app.use(express.json({ limit: '100kb' }));

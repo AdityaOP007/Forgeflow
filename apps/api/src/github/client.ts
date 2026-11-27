@@ -11,6 +11,9 @@ import {
   type GitHubHeadCommit,
   type GitHubInstallationInfo,
   type GitHubRepository,
+  type GitHubWorkflowJob,
+  type GitHubWorkflowRun,
+  type ListWorkflowRunsOptions,
 } from './types.js';
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes before expiry
@@ -435,55 +438,70 @@ export class RealGitHubClient implements GitHubClient {
     return commit;
   }
 
-  /** Returns the recursive tree of blobs/trees for a given commit SHA. */
-  async getRepositoryTree(
-    org: string,
+  /** Lists GitHub Actions workflow runs for a repository in the configured org. */
+  async listWorkflowRuns(
     repo: string,
-    treeSha: string
-  ): Promise<{ path: string; type: string; sha: string }[]> {
+    options: ListWorkflowRunsOptions = {}
+  ): Promise<GitHubWorkflowRun[]> {
     const octokit = await this.getOctokit();
-    return this.withRetry(`Get tree ${org}/${repo}@${treeSha}`, async () => {
-      const { data } = await octokit.rest.git.getTree({
-        owner: org,
+    const owner = this.config.org;
+    return this.withRetry(`List workflow runs for ${owner}/${repo}`, async () => {
+      const { data } = await octokit.rest.actions.listWorkflowRunsForRepo({
+        owner,
         repo,
-        tree_sha: treeSha,
-        recursive: '1',
+        branch: options.branch,
+        head_sha: options.headSha,
+        per_page: options.perPage ?? 20,
       });
-      return data.tree as { path: string; type: string; sha: string }[];
+      return data.workflow_runs.map((run) => ({
+        id: run.id,
+        runAttempt: run.run_attempt ?? 1,
+        headSha: run.head_sha,
+        headBranch: run.head_branch ?? null,
+        event: run.event,
+        status: run.status ?? 'queued',
+        conclusion: run.conclusion ?? null,
+        htmlUrl: run.html_url,
+        runStartedAt: run.run_started_at ?? run.created_at ?? null,
+        updatedAt: run.updated_at ?? null,
+      }));
     });
   }
 
-  /** Returns check runs (GitHub Actions jobs) for a given commit SHA. */
-  async listCheckRunsForCommit(
-    org: string,
+  /** Lists jobs for a specific GitHub Actions workflow run (and optional attempt). */
+  async listWorkflowJobs(
     repo: string,
-    ref: string
-  ): Promise<{ name: string; status: string; conclusion: string | null }[]> {
+    runId: number,
+    runAttempt?: number
+  ): Promise<GitHubWorkflowJob[]> {
     const octokit = await this.getOctokit();
-    // Use workflow runs + jobs (requires actions read, not checks read)
-    return this.withRetry(`List CI jobs ${org}/${repo}@${ref}`, async () => {
-      const { data: runsData } = await octokit.rest.actions.listWorkflowRunsForRepo({
-        owner: org,
-        repo,
-        head_sha: ref,
-        per_page: 10,
-      });
-      const allJobs: { name: string; status: string; conclusion: string | null }[] = [];
-      for (const run of runsData.workflow_runs) {
-        const { data: jobsData } = await octokit.rest.actions.listJobsForWorkflowRun({
-          owner: org,
-          repo,
-          run_id: run.id,
-        });
-        for (const job of jobsData.jobs) {
-          allJobs.push({
-            name: job.name,
-            status: job.status,
-            conclusion: job.conclusion ?? null,
-          });
-        }
-      }
-      return allJobs;
+    const owner = this.config.org;
+    return this.withRetry(`List workflow jobs for ${owner}/${repo} run ${runId}`, async () => {
+      const { data } =
+        runAttempt !== undefined
+          ? await octokit.rest.actions.listJobsForWorkflowRunAttempt({
+              owner,
+              repo,
+              run_id: runId,
+              attempt_number: runAttempt,
+              per_page: 100,
+            })
+          : await octokit.rest.actions.listJobsForWorkflowRun({
+              owner,
+              repo,
+              run_id: runId,
+              per_page: 100,
+            });
+
+      return data.jobs.map((job) => ({
+        id: job.id,
+        name: job.name,
+        status: job.status,
+        conclusion: job.conclusion ?? null,
+        startedAt: job.started_at ?? null,
+        completedAt: job.completed_at ?? null,
+        htmlUrl: job.html_url ?? null,
+      }));
     });
   }
 }

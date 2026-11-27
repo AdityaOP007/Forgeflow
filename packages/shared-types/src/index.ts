@@ -30,6 +30,16 @@ export type WorkflowStepStatus = z.infer<typeof WorkflowStepStatus>;
 export const ServiceProvisioningStatus = z.enum(['provisioning', 'ready', 'failed']);
 export type ServiceProvisioningStatus = z.infer<typeof ServiceProvisioningStatus>;
 
+export const DeploymentStatus = z.enum([
+  'queued',
+  'in_progress',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'rolled_back',
+]);
+export type DeploymentStatus = z.infer<typeof DeploymentStatus>;
+
 // ─── Service validation ─────────────────────────────────────────────
 // Lowercase letters, numbers, hyphens; starts with a letter; 3-40 chars.
 // Rejects path-traversal patterns (../, /, \).
@@ -190,6 +200,71 @@ export interface EnvironmentItem {
   namespace: string | null;
   deployedVersion: string | null;
   status: EnvironmentStatus;
+  nodePort?: number | null;
+  url?: string | null;
+  deployedImage?: string | null;
+  deployedCommitSha?: string | null;
+  observedImage?: string | null;
+  observedReplicas?: number | null;
+  observedReadyReplicas?: number | null;
+  lastObservedAt?: string | null;
+  lastObservedError?: string | null;
+}
+
+// ─── CI Runs & Deployments ───────────────────────────────────────────
+export interface CiJobItem {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  htmlUrl: string | null;
+}
+
+export interface CiRunItem {
+  id: string;
+  serviceId: string;
+  githubRunId: number;
+  runAttempt: number;
+  headSha: string;
+  headBranch: string | null;
+  event: string | null;
+  status: string;
+  conclusion: string | null;
+  htmlUrl: string | null;
+  jobs: CiJobItem[];
+  publishSucceeded: boolean;
+  runStartedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListCiRunsResponse {
+  data: CiRunItem[];
+}
+
+export interface SyncCiRunsResponse {
+  data: CiRunItem[];
+  synced: number;
+}
+
+export interface DeploymentItem {
+  id: string;
+  serviceId: string;
+  environmentId: string;
+  workflowRunId: string | null;
+  commitSha: string;
+  image: string;
+  status: DeploymentStatus;
+  rollbackOf: string | null;
+  triggeredBy: string | null;
+  helmRevision: number | null;
+  errorSummary: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
 }
 
 export interface WorkflowRunItem {

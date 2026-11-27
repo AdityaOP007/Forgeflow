@@ -61,6 +61,35 @@ export interface GitHubCommitResult {
   url: string;
 }
 
+export interface GitHubWorkflowRun {
+  id: number;
+  runAttempt: number;
+  headSha: string;
+  headBranch: string | null;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  htmlUrl: string;
+  runStartedAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface GitHubWorkflowJob {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  htmlUrl: string | null;
+}
+
+export interface ListWorkflowRunsOptions {
+  branch?: string;
+  headSha?: string;
+  perPage?: number;
+}
+
 export interface GitHubClient {
   getInstallationInfo(): Promise<GitHubInstallationInfo>;
   getRepository(name: string): Promise<GitHubRepository>;
@@ -68,4 +97,6 @@ export interface GitHubClient {
   deleteRepository(name: string): Promise<void>;
   getHeadCommit(repo: string, branch: string): Promise<GitHubHeadCommit>;
   createCommitWithFiles(input: CreateCommitWithFilesInput): Promise<GitHubCommitResult>;
+  listWorkflowRuns(repo: string, options?: ListWorkflowRunsOptions): Promise<GitHubWorkflowRun[]>;
+  listWorkflowJobs(repo: string, runId: number, runAttempt?: number): Promise<GitHubWorkflowJob[]>;
 }

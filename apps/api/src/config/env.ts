@@ -23,6 +23,8 @@ const envSchema = z.object({
   GITHUB_APP_INSTALLATION_ID: optionalNonEmptyString,
   GITHUB_ORG: optionalNonEmptyString,
   GITHUB_APP_PRIVATE_KEY_PATH: optionalNonEmptyString,
+  GITHUB_WEBHOOK_SECRET: optionalNonEmptyString,
+  CI_SYNC_INTERVAL_MS: z.coerce.number().int().min(1000).default(60000),
   GHCR_PULL_USERNAME: optionalNonEmptyString,
   GHCR_PULL_TOKEN: optionalNonEmptyString,
 });

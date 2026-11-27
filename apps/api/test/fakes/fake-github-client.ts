@@ -8,6 +8,9 @@ import {
   type GitHubHeadCommit,
   type GitHubInstallationInfo,
   type GitHubRepository,
+  type GitHubWorkflowJob,
+  type GitHubWorkflowRun,
+  type ListWorkflowRunsOptions,
 } from '../../src/github/types.js';
 
 export interface StoredRepo {
@@ -43,6 +46,8 @@ export class FakeGitHubClient implements GitHubClient {
   readonly permissions: Record<string, string>;
 
   readonly repos = new Map<string, StoredRepo>();
+  readonly workflowRuns = new Map<string, GitHubWorkflowRun[]>();
+  readonly workflowJobs = new Map<string, GitHubWorkflowJob[]>();
   callCount = 0;
 
   // Failure injection controls
@@ -235,5 +240,45 @@ export class FakeGitHubClient implements GitHubClient {
       sha: newSha,
       url: `https://github.com/${this.org}/${input.repo}/commit/${newSha}`,
     };
+  }
+
+  /** Seed workflow runs for a repo in tests. */
+  setWorkflowRuns(repo: string, runs: GitHubWorkflowRun[]): void {
+    this.workflowRuns.set(repo, runs);
+  }
+
+  /** Seed workflow jobs for a repo + runId (and optional runAttempt) in tests. */
+  setWorkflowJobs(repo: string, runId: number, jobs: GitHubWorkflowJob[], runAttempt = 1): void {
+    this.workflowJobs.set(`${repo}:${runId}:${runAttempt}`, jobs);
+  }
+
+  async listWorkflowRuns(
+    repo: string,
+    options: ListWorkflowRunsOptions = {}
+  ): Promise<GitHubWorkflowRun[]> {
+    this.recordCall();
+    if (!this.repos.has(repo)) {
+      throw new GitHubError('NOT_FOUND', `Repository ${this.org}/${repo} not found`, 404);
+    }
+    let runs = [...(this.workflowRuns.get(repo) ?? [])];
+    if (options.branch) {
+      runs = runs.filter((r) => r.headBranch === options.branch);
+    }
+    if (options.headSha) {
+      runs = runs.filter((r) => r.headSha === options.headSha);
+    }
+    return runs.slice(0, options.perPage ?? 20);
+  }
+
+  async listWorkflowJobs(
+    repo: string,
+    runId: number,
+    runAttempt = 1
+  ): Promise<GitHubWorkflowJob[]> {
+    this.recordCall();
+    if (!this.repos.has(repo)) {
+      throw new GitHubError('NOT_FOUND', `Repository ${this.org}/${repo} not found`, 404);
+    }
+    return [...(this.workflowJobs.get(`${repo}:${runId}:${runAttempt}`) ?? [])];
   }
 }

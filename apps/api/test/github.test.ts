@@ -463,4 +463,160 @@ describe('GitHub App Integration — Checkpoint 2C', () => {
       expect(res.body.org).toBe('expected-org');
     });
   });
+
+  describe('RealGitHubClient — CI Workflow Runs & Jobs (Checkpoint 3C)', () => {
+    it('listWorkflowRuns maps GitHub Actions workflow runs and passes filter options', async () => {
+      let capturedArgs: Record<string, unknown> | undefined;
+      const client = new RealGitHubClient(baseConfig, {
+        baseBackoffMs: 1,
+        authenticateInstallation: async () => ({
+          token: 'ghs_mock_token_123456789012345678901234567890',
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        }),
+        createOctokit: () =>
+          ({
+            rest: {
+              actions: {
+                listWorkflowRunsForRepo: async (args: Record<string, unknown>) => {
+                  capturedArgs = args;
+                  return {
+                    data: {
+                      workflow_runs: [
+                        {
+                          id: 9001,
+                          run_attempt: 2,
+                          head_sha: 'a'.repeat(40),
+                          head_branch: 'main',
+                          event: 'push',
+                          status: 'completed',
+                          conclusion: 'success',
+                          html_url:
+                            'https://github.com/forgeflow-test-org/orders-api/actions/runs/9001',
+                          run_started_at: '2026-11-27T08:00:00Z',
+                          updated_at: '2026-11-27T08:03:00Z',
+                        },
+                      ],
+                    },
+                  };
+                },
+              },
+            },
+          }) as unknown as Octokit,
+      });
+
+      const runs = await client.listWorkflowRuns('orders-api', {
+        branch: 'main',
+        headSha: 'a'.repeat(40),
+        perPage: 10,
+      });
+
+      expect(capturedArgs).toEqual({
+        owner: 'forgeflow-test-org',
+        repo: 'orders-api',
+        branch: 'main',
+        head_sha: 'a'.repeat(40),
+        per_page: 10,
+      });
+      expect(runs).toEqual([
+        {
+          id: 9001,
+          runAttempt: 2,
+          headSha: 'a'.repeat(40),
+          headBranch: 'main',
+          event: 'push',
+          status: 'completed',
+          conclusion: 'success',
+          htmlUrl: 'https://github.com/forgeflow-test-org/orders-api/actions/runs/9001',
+          runStartedAt: '2026-11-27T08:00:00Z',
+          updatedAt: '2026-11-27T08:03:00Z',
+        },
+      ]);
+    });
+
+    it('listWorkflowJobs uses attempt endpoint when runAttempt is provided and default otherwise', async () => {
+      let attemptCalledWith: Record<string, unknown> | undefined;
+      let defaultCalledWith: Record<string, unknown> | undefined;
+
+      const client = new RealGitHubClient(baseConfig, {
+        baseBackoffMs: 1,
+        authenticateInstallation: async () => ({
+          token: 'ghs_mock_token_123456789012345678901234567890',
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        }),
+        createOctokit: () =>
+          ({
+            rest: {
+              actions: {
+                listJobsForWorkflowRunAttempt: async (args: Record<string, unknown>) => {
+                  attemptCalledWith = args;
+                  return {
+                    data: {
+                      jobs: [
+                        {
+                          id: 101,
+                          name: 'Publish Image',
+                          status: 'completed',
+                          conclusion: 'success',
+                          started_at: '2026-11-27T08:01:00Z',
+                          completed_at: '2026-11-27T08:02:30Z',
+                          html_url:
+                            'https://github.com/forgeflow-test-org/orders-api/actions/runs/9001/job/101',
+                        },
+                      ],
+                    },
+                  };
+                },
+                listJobsForWorkflowRun: async (args: Record<string, unknown>) => {
+                  defaultCalledWith = args;
+                  return {
+                    data: {
+                      jobs: [
+                        {
+                          id: 102,
+                          name: 'Test',
+                          status: 'completed',
+                          conclusion: 'failure',
+                          started_at: '2026-11-27T08:00:10Z',
+                          completed_at: '2026-11-27T08:00:55Z',
+                          html_url: null,
+                        },
+                      ],
+                    },
+                  };
+                },
+              },
+            },
+          }) as unknown as Octokit,
+      });
+
+      const jobsAttempt = await client.listWorkflowJobs('orders-api', 9001, 2);
+      expect(attemptCalledWith).toEqual({
+        owner: 'forgeflow-test-org',
+        repo: 'orders-api',
+        run_id: 9001,
+        attempt_number: 2,
+        per_page: 100,
+      });
+      expect(jobsAttempt).toEqual([
+        {
+          id: 101,
+          name: 'Publish Image',
+          status: 'completed',
+          conclusion: 'success',
+          startedAt: '2026-11-27T08:01:00Z',
+          completedAt: '2026-11-27T08:02:30Z',
+          htmlUrl: 'https://github.com/forgeflow-test-org/orders-api/actions/runs/9001/job/101',
+        },
+      ]);
+
+      const jobsDefault = await client.listWorkflowJobs('orders-api', 9001);
+      expect(defaultCalledWith).toEqual({
+        owner: 'forgeflow-test-org',
+        repo: 'orders-api',
+        run_id: 9001,
+        per_page: 100,
+      });
+      expect(jobsDefault[0].conclusion).toBe('failure');
+    });
+  });
 });

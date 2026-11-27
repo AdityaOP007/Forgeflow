@@ -14,6 +14,7 @@ import { executeWorkflow, type Step } from '../workflows/executor.js';
 import { transitionRun } from '../workflows/state-machine.js';
 import { createScaffoldSteps } from '../workflows/steps/scaffold.js';
 import { RealGitHubClient } from '../github/client.js';
+import { syncAllServicesCiRuns } from '../modules/ci/service.js';
 import { db } from '../db/client.js';
 
 // Ensure environment is validated
@@ -62,6 +63,7 @@ export function createWorker(options: WorkerOptions = {}) {
   let isShuttingDown = false;
   let currentRunId: string | null = null;
   let staleTimer: NodeJS.Timeout | null = null;
+  let ciSyncTimer: NodeJS.Timeout | null = null;
 
   async function pollOnce(): Promise<boolean> {
     if (isShuttingDown) return false;
@@ -113,6 +115,20 @@ export function createWorker(options: WorkerOptions = {}) {
       }
     }, 30000);
 
+    // Periodic CI status sync when GitHub App is configured
+    const ciSyncIntervalMs = env.CI_SYNC_INTERVAL_MS;
+    const runCiSync = async () => {
+      const cfg = getGitHubConfig();
+      if (!cfg.configured || !cfg.config) return;
+      try {
+        const client = new RealGitHubClient(cfg.config);
+        await syncAllServicesCiRuns(client, cfg.config.org);
+      } catch (err) {
+        console.error(`[Worker ${workerId}] Periodic CI sync failed:`, err);
+      }
+    };
+    ciSyncTimer = setInterval(runCiSync, ciSyncIntervalMs);
+
     // Main poll loop (one run at a time)
     while (isRunning && !isShuttingDown) {
       try {
@@ -138,6 +154,10 @@ export function createWorker(options: WorkerOptions = {}) {
     if (staleTimer) {
       clearInterval(staleTimer);
       staleTimer = null;
+    }
+    if (ciSyncTimer) {
+      clearInterval(ciSyncTimer);
+      ciSyncTimer = null;
     }
 
     if (currentRunId) {

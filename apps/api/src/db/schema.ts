@@ -5,13 +5,17 @@ import {
   timestamp,
   pgEnum,
   unique,
+  uniqueIndex,
   index,
   jsonb,
   integer,
+  bigint,
   boolean,
   bigserial,
+  check,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
+import type { CiJobItem } from '@forgeflow/shared-types';
 
 // Enums
 export const userRoleEnum = pgEnum('user_role', ['admin', 'developer', 'viewer']);
@@ -50,6 +54,15 @@ export const workflowStepStatusEnum = pgEnum('workflow_step_status', [
   'succeeded',
   'failed',
   'skipped',
+]);
+
+export const deploymentStatusEnum = pgEnum('deployment_status', [
+  'queued',
+  'in_progress',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'rolled_back',
 ]);
 
 // 1. Users table
@@ -113,10 +126,23 @@ export const environments = pgTable(
     namespace: text('namespace'),
     deployed_version: text('deployed_version'),
     status: environmentStatusEnum('status').default('unknown').notNull(),
+    node_port: integer('node_port').unique(),
+    url: text('url'),
+    deployed_image: text('deployed_image'),
+    deployed_commit_sha: text('deployed_commit_sha'),
+    observed_image: text('observed_image'),
+    observed_replicas: integer('observed_replicas'),
+    observed_ready_replicas: integer('observed_ready_replicas'),
+    last_observed_at: timestamp('last_observed_at', { withTimezone: true }),
+    last_observed_error: text('last_observed_error'),
   },
   (table) => [
     unique('environments_service_name_unique').on(table.service_id, table.name),
     index('environments_service_id_idx').on(table.service_id),
+    check(
+      'environments_node_port_check',
+      sql`${table.node_port} IS NULL OR (${table.node_port} >= 30080 AND ${table.node_port} <= 30089)`
+    ),
   ]
 );
 
@@ -204,6 +230,86 @@ export const auditLogs = pgTable(
   (table) => [index('audit_logs_timestamp_idx').on(table.timestamp)]
 );
 
+// 9. Deployments table
+export const deployments = pgTable(
+  'deployments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    service_id: uuid('service_id')
+      .references(() => services.id, { onDelete: 'cascade' })
+      .notNull(),
+    environment_id: uuid('environment_id')
+      .references(() => environments.id, { onDelete: 'cascade' })
+      .notNull(),
+    workflow_run_id: uuid('workflow_run_id').references(() => workflowRuns.id, {
+      onDelete: 'set null',
+    }),
+    commit_sha: text('commit_sha').notNull(),
+    image: text('image').notNull(),
+    status: deploymentStatusEnum('status').default('queued').notNull(),
+    rollback_of: uuid('rollback_of'),
+    triggered_by: uuid('triggered_by').references(() => users.id),
+    helm_revision: integer('helm_revision'),
+    error_summary: text('error_summary'),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('deployments_service_id_created_at_idx').on(table.service_id, table.created_at),
+    index('deployments_environment_id_created_at_idx').on(table.environment_id, table.created_at),
+    uniqueIndex('deployments_env_active_unique')
+      .on(table.environment_id)
+      .where(sql`status IN ('queued', 'in_progress')`),
+    check('deployments_commit_sha_check', sql`${table.commit_sha} ~ '^[0-9a-f]{40}$'`),
+  ]
+);
+
+// 10. CI Runs table
+export const ciRuns = pgTable(
+  'ci_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    service_id: uuid('service_id')
+      .references(() => services.id, { onDelete: 'cascade' })
+      .notNull(),
+    github_run_id: bigint('github_run_id', { mode: 'number' }).notNull(),
+    run_attempt: integer('run_attempt').default(1).notNull(),
+    head_sha: text('head_sha').notNull(),
+    head_branch: text('head_branch'),
+    event: text('event'),
+    status: text('status').notNull(),
+    conclusion: text('conclusion'),
+    html_url: text('html_url'),
+    jobs: jsonb('jobs').$type<CiJobItem[]>().default([]).notNull(),
+    run_started_at: timestamp('run_started_at', { withTimezone: true }),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique('ci_runs_service_run_attempt_unique').on(
+      table.service_id,
+      table.github_run_id,
+      table.run_attempt
+    ),
+    index('ci_runs_service_id_head_sha_idx').on(table.service_id, table.head_sha),
+    index('ci_runs_service_id_started_at_idx').on(table.service_id, table.run_started_at),
+  ]
+);
+
+// 11. Webhook Deliveries table
+export const webhookDeliveries = pgTable('webhook_deliveries', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  delivery_id: text('delivery_id').unique().notNull(),
+  event: text('event').notNull(),
+  repository: text('repository'),
+  received_at: timestamp('received_at', { withTimezone: true }).defaultNow().notNull(),
+  processed_at: timestamp('processed_at', { withTimezone: true }),
+  status: text('status').default('received').notNull(),
+  error: text('error'),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   services: many(services),
@@ -266,5 +372,31 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   actor: one(users, {
     fields: [auditLogs.actor_id],
     references: [users.id],
+  }),
+}));
+
+export const deploymentsRelations = relations(deployments, ({ one }) => ({
+  service: one(services, {
+    fields: [deployments.service_id],
+    references: [services.id],
+  }),
+  environment: one(environments, {
+    fields: [deployments.environment_id],
+    references: [environments.id],
+  }),
+  workflowRun: one(workflowRuns, {
+    fields: [deployments.workflow_run_id],
+    references: [workflowRuns.id],
+  }),
+  triggeredByUser: one(users, {
+    fields: [deployments.triggered_by],
+    references: [users.id],
+  }),
+}));
+
+export const ciRunsRelations = relations(ciRuns, ({ one }) => ({
+  service: one(services, {
+    fields: [ciRuns.service_id],
+    references: [services.id],
   }),
 }));
