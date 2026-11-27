@@ -1,6 +1,6 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { db, pool } from '../db/client.js';
-import { workflowRuns, workflowSteps, workflowLogs, services } from '../db/schema.js';
+import { workflowRuns, workflowSteps, workflowLogs, services, deployments } from '../db/schema.js';
 import {
   assertRunTransition,
   transitionRun,
@@ -219,6 +219,18 @@ export async function requestCancel(runId: string) {
           locked_at: null,
           locked_by: null,
         });
+
+        if (run.type === 'deploy' || run.type === 'rollback') {
+          await tx
+            .update(deployments)
+            .set({ status: 'cancelled', completed_at: sql`now()` })
+            .where(
+              and(
+                eq(deployments.workflow_run_id, run.id as string),
+                inArray(deployments.status, ['queued', 'in_progress'])
+              )
+            );
+        }
 
         const steps = await tx.query.workflowSteps.findMany({
           where: eq(workflowSteps.workflow_run_id, run.id as string),

@@ -43,4 +43,3 @@ npx smee-client --url https://smee.io/<your-channel> --target http://127.0.0.1:4
 - Every `POST /api/webhooks/github` request must be `application/json` under `256kb`, signed with `X-Hub-Signature-256`, and verified with `crypto.timingSafeEqual` before any database access.
 - Deliveries are deduplicated by `X-GitHub-Delivery` in `webhook_deliveries`.
 - Stale out-of-order `workflow_run` events (older `updated_at`) never overwrite newer state.
-

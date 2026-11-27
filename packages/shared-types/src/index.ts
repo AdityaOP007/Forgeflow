@@ -280,6 +280,40 @@ export interface DeploymentItem {
   createdAt: string;
 }
 
+export const deployServiceSchema = z.object({
+  environmentName: z.literal('development').default('development'),
+  commitSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/, 'commitSha must be a 40-character lowercase hex SHA'),
+});
+export type DeployServiceInput = z.infer<typeof deployServiceSchema>;
+
+export const rollbackServiceSchema = z.object({
+  environmentName: z.literal('development').default('development'),
+  targetDeploymentId: z.string().uuid('targetDeploymentId must be a valid UUID').optional(),
+});
+export type RollbackServiceInput = z.infer<typeof rollbackServiceSchema>;
+
+export const undeployServiceSchema = z.object({
+  environmentName: z.literal('development').default('development'),
+});
+export type UndeployServiceInput = z.infer<typeof undeployServiceSchema>;
+
+export interface DeployServiceResponse {
+  deploymentId: string;
+  workflowId: string;
+  status: 'queued';
+}
+
+export interface UndeployServiceResponse {
+  workflowId: string;
+  status: 'queued';
+}
+
+export interface ListDeploymentsResponse {
+  data: DeploymentItem[];
+}
+
 export interface WorkflowRunItem {
   id: string;
   serviceId: string;

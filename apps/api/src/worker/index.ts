@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -13,7 +14,12 @@ import { claimNext, requeueStale } from '../workflows/queue.js';
 import { executeWorkflow, type Step } from '../workflows/executor.js';
 import { transitionRun } from '../workflows/state-machine.js';
 import { createScaffoldSteps } from '../workflows/steps/scaffold.js';
+import { createDeploySteps, type DeployStepsDeps } from '../workflows/steps/deploy.js';
+import { createRollbackSteps } from '../workflows/steps/rollback.js';
+import { createUndeploySteps } from '../workflows/steps/undeploy.js';
 import { RealGitHubClient } from '../github/client.js';
+import { RealK8sRunner } from '../k8s/exec.js';
+import { reconcileEnvironments } from '../k8s/reconciler.js';
 import { hasInProgressCiRuns, syncAllServicesCiRuns } from '../modules/ci/service.js';
 import { db } from '../db/client.js';
 
@@ -45,6 +51,31 @@ registerWorkflowSteps(
   })
 );
 
+function getWorkerK8sRunner(): RealK8sRunner | null {
+  const env = getEnv();
+  const rawPath = env.KUBECONFIG_WORKER_PATH ?? 'secrets/worker-kubeconfig.yaml';
+  const resolved = path.isAbsolute(rawPath) ? rawPath : path.resolve(repoRoot, rawPath);
+  if (!fs.existsSync(resolved)) return null;
+  return new RealK8sRunner({
+    kubeconfigPath: resolved,
+    namespace: env.K8S_NAMESPACE,
+  });
+}
+
+const deployDeps: DeployStepsDeps = {
+  getK8sRunner: getWorkerK8sRunner,
+  getGhcrCredentials: () => {
+    const env = getEnv();
+    if (!env.GHCR_PULL_USERNAME || !env.GHCR_PULL_TOKEN) return null;
+    return { username: env.GHCR_PULL_USERNAME, token: env.GHCR_PULL_TOKEN };
+  },
+  getExpectedOrg: () => getGitHubConfig().config?.org ?? null,
+};
+
+registerWorkflowSteps('deploy', createDeploySteps(deployDeps));
+registerWorkflowSteps('rollback', createRollbackSteps(deployDeps));
+registerWorkflowSteps('undeploy', createUndeploySteps({ getK8sRunner: getWorkerK8sRunner }));
+
 export interface WorkerOptions {
   workerId?: string;
   pollMs?: number;
@@ -64,6 +95,7 @@ export function createWorker(options: WorkerOptions = {}) {
   let currentRunId: string | null = null;
   let staleTimer: NodeJS.Timeout | null = null;
   let ciSyncTimer: NodeJS.Timeout | null = null;
+  let reconcileTimer: NodeJS.Timeout | null = null;
 
   async function pollOnce(): Promise<boolean> {
     if (isShuttingDown) return false;
@@ -141,9 +173,31 @@ export function createWorker(options: WorkerOptions = {}) {
           }
         }
         void scheduleNextCiSync();
+
+        // Periodic Kubernetes environment reconciliation
+        reconcileTimer = setInterval(async () => {
+          const runner = getWorkerK8sRunner();
+          if (!runner) return;
+          try {
+            await reconcileEnvironments(runner);
+          } catch (err) {
+            console.error(`[Worker ${workerId}] Periodic K8s reconcile failed:`, err);
+          }
+        }, env.RECONCILE_INTERVAL_MS);
       }, Math.round(jitter));
     };
     void scheduleNextCiSync();
+
+    // Periodic Kubernetes environment reconciliation
+    reconcileTimer = setInterval(async () => {
+      const runner = getWorkerK8sRunner();
+      if (!runner) return;
+      try {
+        await reconcileEnvironments(runner);
+      } catch (err) {
+        console.error(`[Worker ${workerId}] Periodic K8s reconcile failed:`, err);
+      }
+    }, env.RECONCILE_INTERVAL_MS);
 
     // Main poll loop (one run at a time)
     while (isRunning && !isShuttingDown) {
@@ -174,6 +228,10 @@ export function createWorker(options: WorkerOptions = {}) {
     if (ciSyncTimer) {
       clearTimeout(ciSyncTimer);
       ciSyncTimer = null;
+    }
+    if (reconcileTimer) {
+      clearInterval(reconcileTimer);
+      reconcileTimer = null;
     }
 
     if (currentRunId) {

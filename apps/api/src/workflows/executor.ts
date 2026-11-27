@@ -1,6 +1,6 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { workflowRuns, workflowSteps, workflowLogs, services } from '../db/schema.js';
+import { workflowRuns, workflowSteps, workflowLogs, services, deployments } from '../db/schema.js';
 import { transitionRun, transitionStep, LostLockError } from './state-machine.js';
 import { heartbeat } from './queue.js';
 import { redactSecrets } from '../utils/redact.js';
@@ -181,6 +181,18 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<void> {
             { workerId }
           );
 
+          if (run.type === 'deploy' || run.type === 'rollback') {
+            await tx
+              .update(deployments)
+              .set({ status: 'cancelled', completed_at: sql`now()` })
+              .where(
+                and(
+                  eq(deployments.workflow_run_id, run.id),
+                  inArray(deployments.status, ['queued', 'in_progress'])
+                )
+              );
+          }
+
           await tx.insert(workflowLogs).values({
             workflow_run_id: run.id,
             level: 'info',
@@ -320,6 +332,22 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<void> {
             },
             { workerId }
           );
+
+          if (run.type === 'deploy' || run.type === 'rollback') {
+            await tx
+              .update(deployments)
+              .set({
+                status: 'failed',
+                error_summary: redacted,
+                completed_at: sql`now()`,
+              })
+              .where(
+                and(
+                  eq(deployments.workflow_run_id, run.id),
+                  inArray(deployments.status, ['queued', 'in_progress'])
+                )
+              );
+          }
 
           await tx.insert(workflowLogs).values({
             workflow_run_id: run.id,
