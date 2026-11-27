@@ -169,3 +169,40 @@ sequenceDiagram
     Worker->>DB: Mark steps/run succeeded, service provisioning_status='ready'
     UI->>API: Poll GET /api/workflows/:id & /logs until terminal
 ```
+
+---
+
+## Phase 3 Deployment, Trust Boundaries & Reconcilers
+
+### Deploy Sequence
+
+```mermaid
+sequenceDiagram
+    participant UI as Web Portal
+    participant API as Express API
+    participant DB as PostgreSQL
+    participant Worker as Workflow Worker
+    participant GH as GitHub API
+    participant K8s as kind-forgeflow (forgeflow-dev)
+
+    UI->>API: POST /api/services/:id/deployments { environment: "development", commitSha? }
+    API->>DB: Insert deployment (queued), workflow_run (deploy, queued), 4 steps
+    API-->>UI: 202 { deploymentId, workflowId, status: "queued" }
+    Worker->>DB: claimNext() via FOR UPDATE SKIP LOCKED
+    Worker->>GH: preflight: verify cluster reachable, chart, GHCR vars, & Publish Image CI success
+    Worker->>K8s: prepare: allocate NodePort (30080-30089), upsert GHCR pull & DB secrets
+    Worker->>K8s: deploy: helm upgrade --install --atomic (timeout=DEPLOY_TIMEOUT_SECONDS)
+    Worker->>K8s: verify: check Deployment readyReplicas, image tag, and HTTP /health/ready
+    Worker->>DB: Update environments (healthy, url, observed_*), mark deployment & workflow succeeded
+```
+
+### API vs Worker Trust Boundary & Restricted Kubeconfig
+
+- **API process (`apps/api/src/index.ts`)**: Handles HTTP requests, RBAC, Zod validation, webhook HMAC verification, and database writes. It does **not** hold cluster credentials or execute `kubectl`/`helm`.
+- **Worker process (`apps/api/src/worker/index.ts`)**: Claims `scaffold`, `deploy`, and `undeploy` jobs from PostgreSQL and interacts with `kind-forgeflow` exclusively through `secrets/worker-kubeconfig.yaml` (scoped to the `forgeflow-worker` ServiceAccount in `forgeflow-dev`).
+- **Restricted RBAC**: `infrastructure/kubernetes/rbac.yaml` grants `forgeflow-worker` namespace-scoped permissions inside `forgeflow-dev` only (Deployments, Services, Pods, Secrets, ConfigMaps, PVCs, ReplicaSets, Events) and no cluster-admin or cross-namespace access.
+
+### CI & Cluster Reconcilers
+
+- **CI Sync Reconciler**: Periodically polls GitHub Actions workflow runs and jobs for ready services so `ci_runs` stays current even when local webhooks are not forwarded.
+- **Cluster Health Reconciler** (`RECONCILE_INTERVAL_MS`): Periodically queries `forgeflow-dev` Deployments and Pods via `KUBECONFIG_WORKER_PATH` and updates `environments.status` (`healthy`, `degraded`, `failed`, `unknown`), `observed_image`, `observed_replicas`, `observed_ready_replicas`, `last_observed_at`, and `last_observed_error`.

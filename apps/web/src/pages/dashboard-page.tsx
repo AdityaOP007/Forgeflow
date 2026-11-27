@@ -155,7 +155,7 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-emerald-400">{summary.healthyCount}</div>
-            <p className="text-xs text-slate-500 mt-1">Passing all health probes</p>
+            <p className="text-xs text-slate-500 mt-1">Services with healthy environment</p>
           </CardContent>
         </Card>
 
@@ -167,7 +167,7 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-blue-400">{summary.activeDeployments}</div>
-            <p className="text-xs text-slate-500 mt-1">Active deployment workflows</p>
+            <p className="text-xs text-slate-500 mt-1">Environments currently deployed</p>
           </CardContent>
         </Card>
 

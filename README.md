@@ -4,6 +4,8 @@ ForgeFlow is an Internal Developer Platform (IDP) web portal that empowers engin
 
 ## Current Status
 
+> **Phase 3 (CI/CD Integration, GHCR Publishing & Local Kubernetes Deployments)**: GitHub Actions CI & `Publish Image` sync, hardened GitHub webhook receiver (`POST /api/webhooks/github`), kind Kubernetes cluster management (`forgeflow-dev`), Helm v4 chart deployments, zero-downtime-style rollbacks, undeploy cleanup, and background cluster/CI reconcilers.
+>
 > **Phase 2 (Service Scaffolding, Workflow Engine & GitHub App Integration)**: Asynchronous workflow queue and worker, template rendering engine (`python-fastapi`), GitHub App integration (`createRepository` + Git Data API commit), 5-step service scaffolding wizard, real-time workflow progress and log streaming, and retry/cancellation controls.
 >
 > **Phase 1 (Foundation and Service Catalog)**: PostgreSQL persistence with Drizzle ORM, local admin mode with server-side RBAC (`admin`, `developer`, `viewer`), service catalog CRUD, architecture templates, dashboard overview, and comprehensive API testing.
@@ -16,8 +18,11 @@ ForgeFlow is an Internal Developer Platform (IDP) web portal that empowers engin
 
 - **Node.js**: v20+ (`node -v`)
 - **pnpm**: v9+ (`pnpm -v`)
-- **Docker**: For local PostgreSQL database (`docker -v` and `docker compose version`)
+- **Docker**: For local PostgreSQL database and kind nodes (`docker -v` and `docker compose version`)
 - **Git**: Version control (`git --version`)
+- **kind** (Kubernetes in Docker, Phase 3): `brew install kind` or `go install sigs.k8s.io/kind@latest`
+- **kubectl** (Phase 3): `brew install kubectl` or `curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && sudo install kubectl /usr/local/bin/kubectl`
+- **helm** v3/v4 (Phase 3): `brew install helm` or `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash`
 
 ---
 
@@ -94,6 +99,37 @@ WORKER_POLL_MS=1000
 ```
 
 3. Verify connectivity with `pnpm --filter @forgeflow/api github:check`.
+
+### 6. Phase 3 Local Kubernetes, GHCR & Optional Webhooks
+
+1. **Bootstrap the local `kind-forgeflow` cluster & restricted worker kubeconfig**:
+
+```bash
+pnpm k8s:doctor        # Verify docker, kind, kubectl, helm, and port availability
+pnpm k8s:up            # Create kind-forgeflow cluster, forgeflow-dev namespace, RBAC, and secrets/worker-kubeconfig.yaml
+pnpm k8s:verify-rbac   # Confirm worker ServiceAccount permissions in forgeflow-dev and denial outside it
+pnpm k8s:smoke         # Optional Helm smoke deployment check
+pnpm k8s:status        # Inspect cluster nodes, pods, and Helm releases
+pnpm k8s:down          # Tear down kind-forgeflow when finished
+```
+
+2. **Configure GHCR Pull Token & Kubernetes Env in `apps/api/.env`** (see [`docs/ghcr-setup.md`](docs/ghcr-setup.md)):
+
+```bash
+GHCR_PULL_USERNAME=<github-username>
+GHCR_PULL_TOKEN=<classic-pat-with-read-packages>
+KUBECONFIG_WORKER_PATH=./secrets/worker-kubeconfig.yaml
+K8S_NAMESPACE=forgeflow-dev
+DEPLOY_TIMEOUT_SECONDS=600
+RECONCILE_INTERVAL_MS=15000
+```
+
+3. **Optional GitHub Webhooks** (see [`docs/webhooks-local.md`](docs/webhooks-local.md)):
+   Set `GITHUB_WEBHOOK_SECRET` in `apps/api/.env` to receive `workflow_run` / `workflow_job` events at `POST /api/webhooks/github` (or rely on the background CI sync reconciler and manual **Sync CI** button).
+
+4. **Full Local Dev Flow**:
+   - Run `pnpm dev` to start Postgres, run migrations/seeds, and launch API (`127.0.0.1:4000`), worker, and Web UI (`localhost:5173`).
+   - Scaffold a service with template `fastapi-service` (`1.1.0+`), wait for GitHub Actions `CI` and `Publish Image` to succeed, then deploy to `development` from the service's **Deployments** tab (exposing `http://127.0.0.1:30080`–`30089`).
 
 ---
 

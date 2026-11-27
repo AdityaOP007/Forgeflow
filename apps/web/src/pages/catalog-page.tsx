@@ -168,7 +168,7 @@ export function CatalogPage() {
               <TableRow>
                 <TableHead>Service</TableHead>
                 <TableHead>Provisioning</TableHead>
-                <TableHead>Health</TableHead>
+                <TableHead>Environment</TableHead>
                 <TableHead>Owner</TableHead>
                 <TableHead>Template</TableHead>
                 <TableHead>Repository</TableHead>
@@ -193,7 +193,14 @@ export function CatalogPage() {
 
                   <TableCell>{getProvisioningBadge(svc.provisioningStatus)}</TableCell>
 
-                  <TableCell>{getHealthBadge(svc.health)}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center space-x-2">
+                      <Badge variant="outline" className="font-mono text-[11px] text-slate-300">
+                        development
+                      </Badge>
+                      {getHealthBadge(svc.health)}
+                    </div>
+                  </TableCell>
 
                   <TableCell className="text-slate-300">{svc.ownerName || 'Unassigned'}</TableCell>
 

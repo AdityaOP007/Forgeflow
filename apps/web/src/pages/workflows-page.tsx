@@ -25,11 +25,12 @@ import {
 } from '../components/ui/table';
 import { Card } from '../components/ui/card';
 import { Skeleton } from '../components/ui/skeleton';
-import type { WorkflowRunStatus } from '@forgeflow/shared-types';
+import type { WorkflowRunStatus, WorkflowType } from '@forgeflow/shared-types';
 
 export function WorkflowsPage() {
   const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
   const pageSize = 15;
 
@@ -38,10 +39,11 @@ export function WorkflowsPage() {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['workflows', statusFilter, page],
+    queryKey: ['workflows', statusFilter, typeFilter, page],
     queryFn: () =>
       fetchWorkflows({
         status: statusFilter !== 'all' ? (statusFilter as WorkflowRunStatus) : undefined,
+        type: typeFilter !== 'all' ? (typeFilter as WorkflowType) : undefined,
         page,
         pageSize,
       }),
@@ -128,6 +130,20 @@ export function WorkflowsPage() {
             <option value="succeeded">Succeeded</option>
             <option value="failed">Failed</option>
             <option value="cancelled">Cancelled</option>
+          </Select>
+          <Select
+            aria-label="Filter workflows by type"
+            value={typeFilter}
+            onChange={(e) => {
+              setTypeFilter(e.target.value);
+              setPage(1);
+            }}
+            className="w-44 bg-slate-950/60"
+          >
+            <option value="all">All Types</option>
+            <option value="scaffold">Scaffold</option>
+            <option value="deploy">Deploy</option>
+            <option value="undeploy">Undeploy</option>
           </Select>
         </div>
         {response && (

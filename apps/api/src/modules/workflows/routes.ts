@@ -82,16 +82,18 @@ workflowsRouter.get(
   validate(listWorkflowsQuerySchema, 'query'),
   async (req: Request, res: Response<PaginatedResponse<WorkflowListItem>>, next: NextFunction) => {
     try {
-      const { page, pageSize, status, serviceId } = req.query as unknown as {
+      const { page, pageSize, status, type, serviceId } = req.query as unknown as {
         page: number;
         pageSize: number;
         status?: WorkflowRunStatus;
+        type?: 'scaffold' | 'deploy' | 'undeploy';
         serviceId?: string;
       };
       const offset = (page - 1) * pageSize;
 
       const conditions = [];
       if (status) conditions.push(eq(workflowRuns.status, status));
+      if (type) conditions.push(eq(workflowRuns.type, type));
       if (serviceId) conditions.push(eq(workflowRuns.service_id, serviceId));
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 

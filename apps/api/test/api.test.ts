@@ -586,9 +586,14 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
         })
         .returning();
 
-      // Attach environments: svc1 healthy, svc2 failed
+      // Attach environments: svc1 healthy (currently deployed), svc2 failed
       await db.insert(environments).values([
-        { service_id: svc1.id, name: 'production', status: 'healthy' },
+        {
+          service_id: svc1.id,
+          name: 'production',
+          status: 'healthy',
+          deployed_image: 'ghcr.io/forgeflow/svc-healthy:' + 'a'.repeat(40),
+        },
         { service_id: svc2.id, name: 'production', status: 'failed' },
       ]);
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { repositoryUrlSchema, isSafeHttpsUrl } from './index.js';
+import { repositoryUrlSchema, isSafeHttpsUrl, isSafeApplicationUrl } from './index.js';
 
 describe('repositoryUrlSchema', () => {
   it('accepts valid https URL', () => {
@@ -117,5 +117,31 @@ describe('isSafeHttpsUrl', () => {
     expect(isSafeHttpsUrl(null)).toBe(false);
     expect(isSafeHttpsUrl(undefined)).toBe(false);
     expect(isSafeHttpsUrl('https://')).toBe(false);
+  });
+});
+
+describe('isSafeApplicationUrl', () => {
+  it('accepts http://127.0.0.1:<port> with port in 30080..30089', () => {
+    expect(isSafeApplicationUrl('http://127.0.0.1:30080')).toBe(true);
+    expect(isSafeApplicationUrl('http://127.0.0.1:30085/docs')).toBe(true);
+    expect(isSafeApplicationUrl('http://127.0.0.1:30089/health/ready')).toBe(true);
+  });
+
+  it('rejects http://localhost, other hosts, other ports, non-http schemes, and userinfo', () => {
+    expect(isSafeApplicationUrl('http://localhost:30080')).toBe(false);
+    expect(isSafeApplicationUrl('http://0.0.0.0:30080')).toBe(false);
+    expect(isSafeApplicationUrl('http://example.com:30080')).toBe(false);
+    expect(isSafeApplicationUrl('http://127.0.0.1:30079')).toBe(false);
+    expect(isSafeApplicationUrl('http://127.0.0.1:30090')).toBe(false);
+    expect(isSafeApplicationUrl('http://127.0.0.1:80')).toBe(false);
+    expect(isSafeApplicationUrl('http://127.0.0.1')).toBe(false);
+    expect(isSafeApplicationUrl('https://127.0.0.1:30080')).toBe(false);
+    expect(isSafeApplicationUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeApplicationUrl('data:text/html,<script>alert(1)</script>')).toBe(false);
+    expect(isSafeApplicationUrl('http://127.0.0.1@evil.com:30080')).toBe(false);
+    expect(isSafeApplicationUrl('http://user:pass@127.0.0.1:30080')).toBe(false);
+    expect(isSafeApplicationUrl('')).toBe(false);
+    expect(isSafeApplicationUrl(null)).toBe(false);
+    expect(isSafeApplicationUrl(undefined)).toBe(false);
   });
 });

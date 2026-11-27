@@ -382,10 +382,14 @@ export interface PaginatedResponse<T> {
 }
 
 // ─── Workflows API ───────────────────────────────────────────────────
+export const WorkflowType = z.enum(['scaffold', 'deploy', 'undeploy']);
+export type WorkflowType = z.infer<typeof WorkflowType>;
+
 export const listWorkflowsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   status: WorkflowRunStatus.optional(),
+  type: WorkflowType.optional(),
   serviceId: z.string().uuid().optional(),
 });
 export type ListWorkflowsQuery = z.infer<typeof listWorkflowsQuerySchema>;
@@ -451,6 +455,26 @@ export function isSafeHttpsUrl(url: string | null | undefined): url is string {
   try {
     const parsed = new URL(trimmed);
     return parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export const ALLOWED_APP_PORT_MIN = 30080;
+export const ALLOWED_APP_PORT_MAX = 30089;
+
+export function isSafeApplicationUrl(url: string | null | undefined): url is string {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed.startsWith('http://127.0.0.1:')) return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:') return false;
+    if (parsed.hostname !== '127.0.0.1') return false;
+    if (parsed.username !== '' || parsed.password !== '') return false;
+    if (!/^\d+$/.test(parsed.port)) return false;
+    const port = Number(parsed.port);
+    return port >= ALLOWED_APP_PORT_MIN && port <= ALLOWED_APP_PORT_MAX;
   } catch {
     return false;
   }

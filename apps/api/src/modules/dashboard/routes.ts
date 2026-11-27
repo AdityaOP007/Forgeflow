@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { DashboardSummary } from '@forgeflow/shared-types';
 import { db } from '../../db/client.js';
 import { services, environments, workflowRuns, ciRuns } from '../../db/schema.js';
-import { count, eq, and, gte, inArray, sql } from 'drizzle-orm';
+import { count, eq, and, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 
 export const dashboardRouter = Router();
 
@@ -48,11 +48,11 @@ dashboardRouter.get(
       // Unknown = total services minus services with known health
       const unknownCount = Number(totalServices) - healthyCount - unhealthyCount;
 
-      // Active deployments (workflow_runs with status 'running')
+      // Currently deployed environments (deployed_image IS NOT NULL)
       const [{ value: activeDeployments }] = await db
         .select({ value: count() })
-        .from(workflowRuns)
-        .where(eq(workflowRuns.status, 'running'));
+        .from(environments)
+        .where(isNotNull(environments.deployed_image));
 
       // Active workflows (queued + running)
       const [{ value: activeWorkflows }] = await db

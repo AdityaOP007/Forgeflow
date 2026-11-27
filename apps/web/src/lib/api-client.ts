@@ -179,6 +179,7 @@ export async function fetchWorkflows(
   if (query?.page) params.set('page', String(query.page));
   if (query?.pageSize) params.set('pageSize', String(query.pageSize));
   if (query?.status) params.set('status', query.status);
+  if (query?.type) params.set('type', query.type);
   if (query?.serviceId) params.set('serviceId', query.serviceId);
 
   const qs = params.toString();

@@ -64,7 +64,8 @@ import {
   TableCell,
 } from '../components/ui/table';
 import { Skeleton } from '../components/ui/skeleton';
-import { isSafeHttpsUrl } from '../lib/utils';
+import { isSafeHttpsUrl, isSafeApplicationUrl } from '../lib/utils';
+import type { DeploymentItem } from '@forgeflow/shared-types';
 
 export function ServiceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -76,6 +77,7 @@ export function ServiceDetailPage() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isDeployDialogOpen, setIsDeployDialogOpen] = useState(false);
   const [isUndeployDialogOpen, setIsUndeployDialogOpen] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState<DeploymentItem | null>(null);
   const [selectedCommitSha, setSelectedCommitSha] = useState('');
   const [deployActionError, setDeployActionError] = useState<string | null>(null);
 
@@ -180,8 +182,22 @@ export function ServiceDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['service', id] });
       navigate(`/workflows/${res.workflowId}`);
     },
-    onError: (err: Error) => {
-      setDeployActionError(err.message);
+    onError: (err: Error & { status?: number }) => {
+      if (err.status === 409) {
+        setDeployActionError(
+          `Deployment conflict (409): ${err.message || 'Another deploy or undeploy workflow is already active for this service.'}`
+        );
+      } else if (err.status === 429) {
+        setDeployActionError(
+          `Rate limited (429): ${err.message || 'Too many deployment requests. Please wait and try again.'}`
+        );
+      } else if (err.status === 503) {
+        setDeployActionError(
+          `Service unavailable (503): ${err.message || 'Cluster or deployment runner is temporarily unavailable.'}`
+        );
+      } else {
+        setDeployActionError(err.message);
+      }
     },
   });
 
@@ -192,8 +208,22 @@ export function ServiceDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['serviceDeployments', id] });
       navigate(`/workflows/${res.workflowId}`);
     },
-    onError: (err: Error) => {
-      setDeployActionError(err.message);
+    onError: (err: Error & { status?: number }) => {
+      if (err.status === 409) {
+        setDeployActionError(
+          `Deployment conflict (409): ${err.message || 'Another deploy or undeploy workflow is already active for this service.'}`
+        );
+      } else if (err.status === 429) {
+        setDeployActionError(
+          `Rate limited (429): ${err.message || 'Too many deployment requests. Please wait and try again.'}`
+        );
+      } else if (err.status === 503) {
+        setDeployActionError(
+          `Service unavailable (503): ${err.message || 'Cluster or deployment runner is temporarily unavailable.'}`
+        );
+      } else {
+        setDeployActionError(err.message);
+      }
     },
   });
 
@@ -206,8 +236,22 @@ export function ServiceDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['service', id] });
       navigate(`/workflows/${res.workflowId}`);
     },
-    onError: (err: Error) => {
-      setDeployActionError(err.message);
+    onError: (err: Error & { status?: number }) => {
+      if (err.status === 409) {
+        setDeployActionError(
+          `Deployment conflict (409): ${err.message || 'Another deploy or undeploy workflow is already active for this service.'}`
+        );
+      } else if (err.status === 429) {
+        setDeployActionError(
+          `Rate limited (429): ${err.message || 'Too many deployment requests. Please wait and try again.'}`
+        );
+      } else if (err.status === 503) {
+        setDeployActionError(
+          `Service unavailable (503): ${err.message || 'Cluster or deployment runner is temporarily unavailable.'}`
+        );
+      } else {
+        setDeployActionError(err.message);
+      }
     },
   });
 
@@ -519,17 +563,28 @@ export function ServiceDetailPage() {
                   <span className="text-slate-400 uppercase font-semibold block mb-1">
                     Endpoint
                   </span>
-                  {devEnv?.url && /^http:\/\/127\.0\.0\.1:\d+$/.test(devEnv.url) ? (
-                    <div className="flex items-center space-x-2">
+                  {isSafeApplicationUrl(devEnv?.url) ? (
+                    <div className="flex flex-wrap items-center gap-3">
                       <a
-                        href={`${devEnv.url}/health/ready`}
+                        href={devEnv.url}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-indigo-400 hover:underline font-mono inline-flex items-center space-x-1"
                       >
-                        <span>{devEnv.url}</span>
+                        <span>Open application</span>
                         <ExternalLink className="h-3 w-3" />
                       </a>
+                      {isSafeApplicationUrl(`${devEnv.url}/docs`) && (
+                        <a
+                          href={`${devEnv.url}/docs`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-slate-300 hover:text-indigo-300 hover:underline font-mono inline-flex items-center space-x-1"
+                        >
+                          <span>API docs</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
                     </div>
                   ) : (
                     <span className="text-slate-500">—</span>
@@ -635,7 +690,7 @@ export function ServiceDetailPage() {
                                 variant="outline"
                                 size="sm"
                                 disabled={rollbackMutation.isPending}
-                                onClick={() => rollbackMutation.mutate(dep.id)}
+                                onClick={() => setRollbackTarget(dep)}
                                 className="space-x-1"
                               >
                                 <RotateCcw className="h-3 w-3" />
@@ -927,13 +982,28 @@ export function ServiceDetailPage() {
             </div>
           )}
 
-          {loadingDeployable ? (
+          {service.templateVersion === '1.0.0' ? (
+            <div className="p-3 rounded bg-amber-950/30 border border-amber-500/30 text-xs text-amber-200">
+              Template version <span className="font-mono">1.0.0</span> does not include container
+              image publishing. Scaffold a service with template{' '}
+              <span className="font-mono">1.1.0+</span> to deploy to Kubernetes.
+            </div>
+          ) : loadingDeployable ? (
             <Skeleton className="h-10 w-full" />
           ) : !deployableCommits || deployableCommits.length === 0 ? (
-            <div className="p-3 rounded bg-amber-950/30 border border-amber-500/30 text-xs text-amber-200">
-              No deployable commits found yet. Wait for GitHub Actions CI and the Publish Image job
-              to complete on <span className="font-mono">main</span>, then sync CI.
-            </div>
+            ciRuns?.some((r) => r.status === 'queued' || r.status === 'in_progress') ? (
+              <div className="p-3 rounded bg-indigo-950/30 border border-indigo-500/30 text-xs text-indigo-200">
+                GitHub Actions CI is still running. Wait for the{' '}
+                <span className="font-mono">Publish Image</span> job to finish on{' '}
+                <span className="font-mono">main</span>, then sync CI.
+              </div>
+            ) : (
+              <div className="p-3 rounded bg-amber-950/30 border border-amber-500/30 text-xs text-amber-200">
+                No successful published commit yet. Wait for GitHub Actions CI and the{' '}
+                <span className="font-mono">Publish Image</span> job to succeed on{' '}
+                <span className="font-mono">main</span>, then sync CI.
+              </div>
+            )
           ) : (
             <div className="space-y-2">
               <label className="text-xs font-semibold text-slate-300 uppercase">
@@ -965,6 +1035,7 @@ export function ServiceDetailPage() {
             <Button
               type="button"
               disabled={
+                service.templateVersion === '1.0.0' ||
                 deployMutation.isPending ||
                 loadingDeployable ||
                 !deployableCommits ||
@@ -977,6 +1048,48 @@ export function ServiceDetailPage() {
               }
             >
               {deployMutation.isPending ? 'Deploying...' : 'Start Deploy'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rollback Confirmation Dialog */}
+      <Dialog
+        open={Boolean(rollbackTarget)}
+        onOpenChange={(open) => !open && setRollbackTarget(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Rollback</DialogTitle>
+            <DialogDescription>
+              Roll back <span className="font-semibold text-white">{service.name}</span> in{' '}
+              <span className="font-mono text-slate-200">development</span> to commit{' '}
+              <span className="font-mono text-indigo-300">
+                {rollbackTarget?.commitSha.slice(0, 7)}
+              </span>
+              ? This creates a new deployment using that commit&apos;s verified image.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRollbackTarget(null)}
+              disabled={rollbackMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!rollbackTarget || rollbackMutation.isPending}
+              onClick={() => {
+                if (rollbackTarget) {
+                  rollbackMutation.mutate(rollbackTarget.id);
+                  setRollbackTarget(null);
+                }
+              }}
+            >
+              {rollbackMutation.isPending ? 'Starting Rollback...' : 'Confirm Rollback'}
             </Button>
           </DialogFooter>
         </DialogContent>

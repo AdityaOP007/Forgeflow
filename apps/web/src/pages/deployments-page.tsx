@@ -18,6 +18,14 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '../components/ui/dialog';
+import {
   Table,
   TableHeader,
   TableBody,
@@ -26,6 +34,17 @@ import {
   TableCell,
 } from '../components/ui/table';
 import { Skeleton } from '../components/ui/skeleton';
+
+function formatDuration(startedAt: string | null, completedAt: string | null): string {
+  if (!startedAt) return '—';
+  const startMs = new Date(startedAt).getTime();
+  const endMs = completedAt ? new Date(completedAt).getTime() : Date.now();
+  const diffSec = Math.max(0, (endMs - startMs) / 1000);
+  if (diffSec < 60) return `${diffSec.toFixed(1)}s`;
+  const mins = Math.floor(diffSec / 60);
+  const secs = Math.round(diffSec % 60);
+  return `${mins}m ${secs}s`;
+}
 
 function deploymentBadge(status: DeploymentStatus) {
   switch (status) {
@@ -60,6 +79,7 @@ export function DeploymentsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [serviceFilter, setServiceFilter] = useState<string>('');
   const [rollbackError, setRollbackError] = useState<string | null>(null);
+  const [rollbackTarget, setRollbackTarget] = useState<DeploymentItem | null>(null);
 
   const { data: servicesData } = useQuery({
     queryKey: ['services', 'all-for-filter'],
@@ -119,12 +139,10 @@ export function DeploymentsPage() {
             className="w-40"
           >
             <option value="">All statuses</option>
-            <option value="queued">Queued</option>
-            <option value="in_progress">In Progress</option>
             <option value="succeeded">Succeeded</option>
+            <option value="in_progress">In Progress</option>
             <option value="failed">Failed</option>
             <option value="rolled_back">Rolled Back</option>
-            <option value="cancelled">Cancelled</option>
           </Select>
 
           <Select
@@ -190,10 +208,11 @@ export function DeploymentsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Service</TableHead>
-                  <TableHead>Commit</TableHead>
+                  <TableHead>Version</TableHead>
+                  <TableHead>Environment</TableHead>
+                  <TableHead>Started</TableHead>
+                  <TableHead>Duration</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Revision</TableHead>
-                  <TableHead>Created</TableHead>
                   <TableHead>Workflow</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -222,6 +241,19 @@ export function DeploymentsPage() {
                         )}
                       </TableCell>
                       <TableCell>
+                        <Badge variant="outline" className="font-mono text-[11px] text-slate-300">
+                          development
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-400 font-mono">
+                        {dep.startedAt
+                          ? new Date(dep.startedAt).toLocaleString()
+                          : new Date(dep.createdAt).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-400 font-mono">
+                        {formatDuration(dep.startedAt, dep.completedAt)}
+                      </TableCell>
+                      <TableCell>
                         {deploymentBadge(dep.status)}
                         {dep.errorSummary && (
                           <p
@@ -231,12 +263,6 @@ export function DeploymentsPage() {
                             {dep.errorSummary}
                           </p>
                         )}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-slate-400">
-                        {dep.helmRevision !== null ? `rev ${dep.helmRevision}` : '—'}
-                      </TableCell>
-                      <TableCell className="text-xs text-slate-400 font-mono">
-                        {new Date(dep.createdAt).toLocaleString()}
                       </TableCell>
                       <TableCell>
                         {dep.workflowRunId ? (
@@ -257,7 +283,7 @@ export function DeploymentsPage() {
                             variant="outline"
                             size="sm"
                             disabled={rollbackMutation.isPending}
-                            onClick={() => rollbackMutation.mutate(dep.id)}
+                            onClick={() => setRollbackTarget(dep)}
                             className="space-x-1"
                           >
                             <RotateCcw className="h-3 w-3" />
@@ -299,6 +325,53 @@ export function DeploymentsPage() {
           </div>
         </div>
       )}
+
+      <Dialog
+        open={Boolean(rollbackTarget)}
+        onOpenChange={(open) => !open && setRollbackTarget(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Rollback</DialogTitle>
+            <DialogDescription>
+              Roll back{' '}
+              <span className="font-semibold text-white">
+                {rollbackTarget
+                  ? (serviceNameById.get(rollbackTarget.serviceId) ??
+                    rollbackTarget.serviceId.slice(0, 8))
+                  : ''}
+              </span>{' '}
+              in <span className="font-mono text-slate-200">development</span> to commit{' '}
+              <span className="font-mono text-indigo-300">
+                {rollbackTarget?.commitSha.slice(0, 7)}
+              </span>
+              ? This creates a new deployment using that commit&apos;s verified image.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRollbackTarget(null)}
+              disabled={rollbackMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!rollbackTarget || rollbackMutation.isPending}
+              onClick={() => {
+                if (rollbackTarget) {
+                  rollbackMutation.mutate(rollbackTarget.id);
+                  setRollbackTarget(null);
+                }
+              }}
+            >
+              {rollbackMutation.isPending ? 'Starting Rollback...' : 'Confirm Rollback'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

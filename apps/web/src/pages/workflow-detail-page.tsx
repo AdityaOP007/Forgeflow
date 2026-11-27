@@ -37,7 +37,7 @@ import {
   DialogFooter,
 } from '../components/ui/dialog';
 import { Skeleton } from '../components/ui/skeleton';
-import { isSafeHttpsUrl } from '../lib/utils';
+import { isSafeHttpsUrl, isSafeApplicationUrl } from '../lib/utils';
 import type { WorkflowLog, WorkflowRunStatus, WorkflowStepStatus } from '@forgeflow/shared-types';
 
 interface WorkflowResourcesShape {
@@ -56,6 +56,13 @@ interface WorkflowResourcesShape {
     sha?: string;
     url?: string;
   };
+  deploymentId?: string;
+  environment?: string;
+  commitSha?: string;
+  image?: string;
+  helmRevision?: number;
+  url?: string;
+  nodePort?: number;
 }
 
 export function WorkflowDetailPage() {
@@ -430,6 +437,67 @@ export function WorkflowDetailPage() {
         </CardContent>
       </Card>
 
+      {/* Deployment Details (for deploy workflows) */}
+      {(resources.image || resources.url || resources.commitSha) && (
+        <Card className="border-slate-800 bg-slate-900/60">
+          <CardHeader className="pb-3 flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-base">Deployment Details</CardTitle>
+            {workflow.status === 'succeeded' && isSafeApplicationUrl(resources.url) && (
+              <div className="flex items-center space-x-3">
+                <a
+                  href={resources.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center space-x-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 hover:underline"
+                >
+                  <span>Open application</span>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+                {isSafeApplicationUrl(`${resources.url}/docs`) && (
+                  <a
+                    href={`${resources.url}/docs`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center space-x-1.5 text-xs font-medium text-slate-300 hover:text-indigo-300 hover:underline"
+                  >
+                    <span>API docs</span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
+              </div>
+            )}
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+            <div>
+              <span className="text-slate-400 uppercase font-semibold block mb-1">Environment</span>
+              <span className="font-mono text-slate-200">
+                {resources.environment || 'development'}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 uppercase font-semibold block mb-1">Commit</span>
+              <span className="font-mono text-slate-200" title={resources.commitSha}>
+                {resources.commitSha ? resources.commitSha.slice(0, 7) : '—'}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 uppercase font-semibold block mb-1">
+                Helm Revision
+              </span>
+              <span className="font-mono text-slate-200">
+                {resources.helmRevision !== undefined ? `rev ${resources.helmRevision}` : '—'}
+              </span>
+            </div>
+            <div className="min-w-0">
+              <span className="text-slate-400 uppercase font-semibold block mb-1">Image</span>
+              <span className="font-mono text-slate-300 truncate block" title={resources.image}>
+                {resources.image || '—'}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Provisioned Resources */}
       {(resources.template || resources.repository || resources.commit) && (
         <Card className="border-slate-800 bg-slate-900/60">
@@ -610,6 +678,10 @@ export function WorkflowDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <p className="text-xs text-slate-500 text-center">
+        GitOps, approvals, and observability arrive in Phase 4.
+      </p>
     </div>
   );
 }
