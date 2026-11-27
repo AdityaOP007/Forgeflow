@@ -10,6 +10,7 @@ import { ServiceDetailPage } from './pages/service-detail-page';
 import { TemplatesPage } from './pages/templates-page';
 import { WorkflowsPage } from './pages/workflows-page';
 import { WorkflowDetailPage } from './pages/workflow-detail-page';
+import { DeploymentsPage } from './pages/deployments-page';
 import { ComingSoonPage } from './pages/coming-soon-page';
 import { Skeleton } from './components/ui/skeleton';
 import { ErrorBoundary } from './components/error-boundary';
@@ -56,20 +57,9 @@ function AppRouter() {
         <Route path="/templates" element={<TemplatesPage />} />
         <Route path="/workflows" element={<WorkflowsPage />} />
         <Route path="/workflows/:id" element={<WorkflowDetailPage />} />
+        <Route path="/deployments" element={<DeploymentsPage />} />
 
         {/* Coming Soon Feature Routes */}
-        <Route
-          path="/deployments"
-          element={
-            <ComingSoonPage
-              title="Deployments"
-              description="Orchestrate and track multi-environment container deployments across Kubernetes clusters."
-              phase="Phase 3: Deployments & Environments"
-              phaseNumber={3}
-              icon="deployments"
-            />
-          }
-        />
         <Route
           path="/observability"
           element={

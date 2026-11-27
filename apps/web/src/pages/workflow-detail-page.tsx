@@ -533,10 +533,6 @@ export function WorkflowDetailPage() {
         </Card>
       )}
 
-      <p className="text-xs text-slate-500">
-        Note: Automated container build, deployment, and health verification arrive in Phase 3.
-      </p>
-
       {/* Execution Logs */}
       <Card className="border-slate-800 bg-slate-900/60">
         <CardHeader className="pb-3 flex flex-row items-center justify-between space-y-0">

@@ -16,6 +16,18 @@ import type {
   WorkflowDetailResponse,
   WorkflowLogsResponse,
   GitHubIntegrationStatus,
+  CiRunItem,
+  ListCiRunsResponse,
+  SyncCiRunsResponse,
+  DeployableCommitItem,
+  ListDeployableCommitsResponse,
+  DeploymentItem,
+  ListDeploymentsQuery,
+  ListDeploymentsResponse,
+  DeployServiceInput,
+  DeployServiceResponse,
+  RollbackDeploymentInput,
+  UndeployServiceResponse,
 } from '@forgeflow/shared-types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -200,6 +212,78 @@ export async function cancelWorkflow(
 ): Promise<{ workflowId: string; status: string; cancelRequested: boolean }> {
   return apiRequest<{ workflowId: string; status: string; cancelRequested: boolean }>(
     `/api/workflows/${id}/cancel`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+// ─── CI & Deployments (Phase 3) ──────────────────────────────────────
+
+export async function fetchServiceCiRuns(serviceId: string): Promise<CiRunItem[]> {
+  const res = await apiRequest<ListCiRunsResponse>(`/api/services/${serviceId}/ci-runs`);
+  return res.data;
+}
+
+export async function syncServiceCiRuns(serviceId: string): Promise<SyncCiRunsResponse> {
+  return apiRequest<SyncCiRunsResponse>(`/api/services/${serviceId}/ci-runs/sync`, {
+    method: 'POST',
+  });
+}
+
+export async function fetchDeployableCommits(serviceId: string): Promise<DeployableCommitItem[]> {
+  const res = await apiRequest<ListDeployableCommitsResponse>(
+    `/api/services/${serviceId}/deployable-commits`
+  );
+  return res.data;
+}
+
+export async function fetchDeployments(
+  query?: Partial<ListDeploymentsQuery>
+): Promise<PaginatedResponse<DeploymentItem>> {
+  const params = new URLSearchParams();
+  if (query?.page) params.set('page', String(query.page));
+  if (query?.pageSize) params.set('pageSize', String(query.pageSize));
+  if (query?.status) params.set('status', query.status);
+  if (query?.serviceId) params.set('serviceId', query.serviceId);
+  if (query?.environment) params.set('environment', query.environment);
+
+  const qs = params.toString();
+  return apiRequest<PaginatedResponse<DeploymentItem>>(`/api/deployments${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchDeploymentById(id: string): Promise<DeploymentItem> {
+  return apiRequest<DeploymentItem>(`/api/deployments/${id}`);
+}
+
+export async function fetchServiceDeployments(serviceId: string): Promise<DeploymentItem[]> {
+  const res = await apiRequest<ListDeploymentsResponse>(`/api/services/${serviceId}/deployments`);
+  return res.data;
+}
+
+export async function createDeployment(
+  serviceId: string,
+  input: DeployServiceInput
+): Promise<DeployServiceResponse> {
+  return apiRequest<DeployServiceResponse>(`/api/services/${serviceId}/deployments`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function rollbackDeployment(
+  deploymentId: string,
+  input: RollbackDeploymentInput = { environment: 'development' }
+): Promise<DeployServiceResponse> {
+  return apiRequest<DeployServiceResponse>(`/api/deployments/${deploymentId}/rollback`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function undeployService(serviceId: string): Promise<UndeployServiceResponse> {
+  return apiRequest<UndeployServiceResponse>(
+    `/api/services/${serviceId}/environments/development/undeploy`,
     {
       method: 'POST',
     }

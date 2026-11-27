@@ -12,7 +12,12 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useAppAuth } from '../context/auth-context';
-import { fetchDashboardSummary, fetchGitHubIntegration, fetchServices } from '../lib/api-client';
+import {
+  fetchDashboardSummary,
+  fetchDeployments,
+  fetchGitHubIntegration,
+  fetchServices,
+} from '../lib/api-client';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
@@ -39,6 +44,11 @@ export function DashboardPage() {
   const { data: servicesData } = useQuery({
     queryKey: ['services', 'checklist'],
     queryFn: () => fetchServices({ pageSize: 100 }),
+  });
+
+  const { data: deploymentsData } = useQuery({
+    queryKey: ['deployments', 'checklist'],
+    queryFn: () => fetchDeployments({ pageSize: 20, status: 'succeeded' }),
   });
 
   if (isLoading) {
@@ -80,6 +90,9 @@ export function DashboardPage() {
   const hasReadyService = Boolean(
     servicesData?.data.some((svc) => svc.provisioningStatus === 'ready')
   );
+  const hasSucceededDeployment = Boolean(
+    (deploymentsData?.total ?? 0) > 0 || summary.healthyCount > 0
+  );
   const checklist = [
     {
       title: 'Connect GitHub',
@@ -95,8 +108,8 @@ export function DashboardPage() {
     },
     {
       title: 'Deploy to environment',
-      description: 'Container build, deployment, and health verification arrive in Phase 3',
-      done: false,
+      description: 'Deploy a built container image to the local Kubernetes development environment',
+      done: hasSucceededDeployment,
     },
   ];
 

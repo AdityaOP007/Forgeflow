@@ -121,7 +121,7 @@ export async function deployHelmRelease(
   params: DeployHelmParams
 ): Promise<HelmReleaseStatus> {
   const rollbackFlag = await getHelmRollbackFlag(runner);
-  const timeoutSeconds = params.timeoutSeconds ?? 300;
+  const timeoutSeconds = params.timeoutSeconds ?? 600;
   const valuesPayload = JSON.stringify({
     name: params.serviceSlug,
     image: {

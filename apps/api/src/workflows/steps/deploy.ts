@@ -358,7 +358,7 @@ export function createDeploySteps(deps: DeployStepsDeps): Step[] {
         const ghcrSecretName = String(ctx.resources.ghcrSecretName);
         const dbSecretName = String(ctx.resources.dbSecretName);
         const chartPath = String(ctx.resources.chartPath ?? SERVICE_CHART_PATH);
-        const timeoutSeconds = deps.getDeployTimeoutSeconds?.() ?? 300;
+        const timeoutSeconds = deps.getDeployTimeoutSeconds?.() ?? 600;
         const environmentId = String(ctx.resources.environmentId);
         const hadPrior = ctx.resources.hadPriorDeployment === true;
         const priorImage =

@@ -25,4 +25,6 @@ GHCR_PULL_TOKEN=<ghp_token>
 ## 3. Security & Rotation
 
 - **Privilege boundary:** Only the ForgeFlow **worker** process reads `GHCR_PULL_USERNAME` and `GHCR_PULL_TOKEN` to build the Kubernetes `ghcr-pull` `dockerconfigjson` secret inside the `forgeflow-dev` namespace. The Express API process never creates or reads Kubernetes secrets.
+- **Package visibility:** Newly published GHCR packages may be created as **public** depending on organization defaults. After the first CI publish of a new service, check its GitHub Packages settings and set visibility to **Private** if the image should not be publicly pullable.
 - **Rotation:** Before the 90-day expiry, generate a new `read:packages` classic token, update `GHCR_PULL_TOKEN` in `apps/api/.env`, and restart `pnpm dev` (the next deploy refreshes the `ghcr-pull` secret automatically).
+- **Deploy timeout:** `DEPLOY_TIMEOUT_SECONDS` defaults to `600` seconds to accommodate first-time container image pulls into `kind`.
