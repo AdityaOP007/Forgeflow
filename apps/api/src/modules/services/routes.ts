@@ -4,6 +4,7 @@ import rateLimit from 'express-rate-limit';
 import {
   createServiceSchema,
   updateServiceSchema,
+  updateServiceOwnerSchema,
   scaffoldServiceSchema,
   listServicesQuerySchema,
 } from '@forgeflow/shared-types';
@@ -22,7 +23,7 @@ import {
 import { createCiRouter, type CiRouterOptions } from '../ci/routes.js';
 import { createServiceDeploymentsRouter } from '../deployments/routes.js';
 import { db } from '../../db/client.js';
-import { services } from '../../db/schema.js';
+import { services, users } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 
 export interface ServicesRouterOptions {
@@ -188,6 +189,54 @@ export function createServicesRouter(options: ServicesRouterOptions = {}): Route
           });
           return;
         }
+        next(err);
+      }
+    }
+  );
+
+  // PATCH /api/services/:id/owner — transfer service ownership (admin only)
+  router.patch(
+    '/:id/owner',
+    requireRole('admin'),
+    validate(updateServiceOwnerSchema),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { ownerId } = req.body as { ownerId: string };
+        const [existing] = await db
+          .select({ id: services.id })
+          .from(services)
+          .where(eq(services.id, req.params.id))
+          .limit(1);
+
+        if (!existing) {
+          res.status(404).json({
+            error: { code: 'NOT_FOUND', message: 'Service not found' },
+          });
+          return;
+        }
+
+        const [targetUser] = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, ownerId))
+          .limit(1);
+
+        if (!targetUser) {
+          res.status(404).json({
+            error: { code: 'NOT_FOUND', message: 'Target owner user not found' },
+          });
+          return;
+        }
+
+        await db
+          .update(services)
+          .set({ owner_id: ownerId, updated_at: new Date() })
+          .where(eq(services.id, req.params.id));
+
+        await writeAuditLog(req.auth!.userId!, 'service.owner_updated', 'service', req.params.id);
+        const updated = await getServiceById(req.params.id);
+        res.json(updated);
+      } catch (err) {
         next(err);
       }
     }

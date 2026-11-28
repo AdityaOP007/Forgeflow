@@ -28,9 +28,19 @@ import type {
   DeployServiceResponse,
   RollbackDeploymentInput,
   UndeployServiceResponse,
+  ListUsersResponse,
+  UserRole,
+  AuditLogItem,
+  ListAuditLogsQuery,
 } from '@forgeflow/shared-types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
+let authTokenGetter: (() => Promise<string | null>) | null = null;
+
+export function setAuthTokenGetter(getter: () => Promise<string | null>): void {
+  authTokenGetter = getter;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -54,10 +64,12 @@ export async function apiRequest<T>(
   let attempt = 0;
   while (true) {
     try {
+      const token = authTokenGetter ? await authTokenGetter() : null;
       const res = await fetch(url, {
         ...rest,
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...headers,
         },
       });
@@ -289,4 +301,42 @@ export async function undeployService(serviceId: string): Promise<UndeployServic
       method: 'POST',
     }
   );
+}
+
+export async function fetchUsers(): Promise<UserProfile[]> {
+  const res = await apiRequest<ListUsersResponse>('/api/users');
+  return res.data;
+}
+
+export async function updateUserRole(userId: string, role: UserRole): Promise<UserProfile> {
+  return apiRequest<UserProfile>(`/api/users/${userId}/role`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function updateServiceOwner(
+  serviceId: string,
+  ownerId: string
+): Promise<ServiceDetail> {
+  return apiRequest<ServiceDetail>(`/api/services/${serviceId}/owner`, {
+    method: 'PATCH',
+    body: JSON.stringify({ ownerId }),
+  });
+}
+
+export async function fetchAuditLogs(
+  query?: Partial<ListAuditLogsQuery>
+): Promise<PaginatedResponse<AuditLogItem>> {
+  const params = new URLSearchParams();
+  if (query?.page) params.set('page', String(query.page));
+  if (query?.pageSize) params.set('pageSize', String(query.pageSize));
+  if (query?.action) params.set('action', query.action);
+  if (query?.resourceType) params.set('resourceType', query.resourceType);
+  if (query?.actorId) params.set('actorId', query.actorId);
+  if (query?.from) params.set('from', query.from);
+  if (query?.to) params.set('to', query.to);
+
+  const qs = params.toString();
+  return apiRequest<PaginatedResponse<AuditLogItem>>(`/api/audit-logs${qs ? `?${qs}` : ''}`);
 }

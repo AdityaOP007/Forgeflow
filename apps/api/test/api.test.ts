@@ -12,8 +12,7 @@ import {
 } from '../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { createApp } from '../src/app.js';
-import { localUserAuthVerifier, LOCAL_ADMIN_CLERK_ID } from '../src/middleware/auth.js';
-import { loadEnv, resetEnv } from '../src/config/env.js';
+import { assertClerkConfigured, loadEnv, resetEnv } from '../src/config/env.js';
 import pg from 'pg';
 
 describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
@@ -821,63 +820,25 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
     });
   });
 
-  // ─── 12. Local-User Auth and Safety Guards ────────────────────────────
-  describe('Local-User Auth and Safety Guards', () => {
-    const localApp = createApp({ auth: localUserAuthVerifier });
-
-    it('GET /api/me with no header returns admin role and local user data', async () => {
-      const res = await request(localApp).get('/api/me');
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({
-        clerkId: LOCAL_ADMIN_CLERK_ID,
-        email: 'admin@forgeflow.local',
-        name: 'Local Admin',
-        role: 'admin',
-      });
-      expect(res.body).toHaveProperty('id');
-      expect(res.body).toHaveProperty('createdAt');
-
-      // Verify row exists in DB
-      const dbRow = await db.query.users.findFirst({
-        where: eq(users.clerk_id, LOCAL_ADMIN_CLERK_ID),
-      });
-      expect(dbRow).toBeDefined();
-      expect(dbRow?.role).toBe('admin');
-      expect(dbRow?.email).toBe('admin@forgeflow.local');
-    });
-
-    it('two concurrent first requests create one users row and both succeed', async () => {
-      // Ensure local admin does not exist before requests
-      await db.delete(users).where(eq(users.clerk_id, LOCAL_ADMIN_CLERK_ID));
-
-      const [res1, res2] = await Promise.all([
-        request(localApp).get('/api/me'),
-        request(localApp).get('/api/me'),
-      ]);
-
-      expect(res1.status).toBe(200);
-      expect(res2.status).toBe(200);
-      expect(res1.body.id).toBe(res2.body.id);
-      expect(res1.body.role).toBe('admin');
-      expect(res2.body.role).toBe('admin');
-
-      // Verify exactly one row was created in the database
-      const rows = await db.select().from(users).where(eq(users.clerk_id, LOCAL_ADMIN_CLERK_ID));
-      expect(rows).toHaveLength(1);
-      expect(rows[0].email).toBe('admin@forgeflow.local');
-    });
-
-    it('production mode with local auth throws the safety error', () => {
+  // ─── 12. Clerk Startup Guard ───────────────────────────────────────────
+  describe('Clerk Startup Guard', () => {
+    it('assertClerkConfigured throws when CLERK_SECRET_KEY or CLERK_PUBLISHABLE_KEY is missing outside test', () => {
       const originalNodeEnv = process.env.NODE_ENV;
+      const originalSecret = process.env.CLERK_SECRET_KEY;
+      const originalPub = process.env.CLERK_PUBLISHABLE_KEY;
       try {
-        process.env.NODE_ENV = 'production';
+        process.env.NODE_ENV = 'development';
+        delete process.env.CLERK_SECRET_KEY;
+        delete process.env.CLERK_PUBLISHABLE_KEY;
         resetEnv();
-        expect(() => loadEnv()).toThrow('Local auth cannot be used in production');
-        expect(() => createApp({ auth: localUserAuthVerifier })).toThrow(
-          'Local auth cannot be used in production'
+        const env = loadEnv();
+        expect(() => assertClerkConfigured(env)).toThrow(
+          'CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY are required'
         );
       } finally {
         process.env.NODE_ENV = originalNodeEnv;
+        if (originalSecret !== undefined) process.env.CLERK_SECRET_KEY = originalSecret;
+        if (originalPub !== undefined) process.env.CLERK_PUBLISHABLE_KEY = originalPub;
         resetEnv();
       }
     });

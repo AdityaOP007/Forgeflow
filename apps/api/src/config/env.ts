@@ -16,7 +16,9 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   DATABASE_URL: z.string().url(),
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
-  LOCAL_USER_EMAIL: z.string().email().default('admin@forgeflow.local'),
+  CLERK_SECRET_KEY: optionalNonEmptyString,
+  CLERK_PUBLISHABLE_KEY: optionalNonEmptyString,
+  ADMIN_EMAILS: optionalNonEmptyString,
   WORKER_POLL_MS: z.coerce.number().default(1000),
   WORKER_STALE_MS: z.coerce.number().default(120000),
   GITHUB_APP_ID: optionalNonEmptyString,
@@ -65,13 +67,27 @@ export function loadEnv(): Env {
     process.exit(1);
   }
 
-  // Hard safety guard: local auth mode must never run in production
-  if (result.data.NODE_ENV === 'production') {
-    throw new Error('Local auth cannot be used in production');
-  }
-
   _env = result.data;
   return _env;
+}
+
+export function assertClerkConfigured(env: Env = getEnv()): void {
+  if (env.NODE_ENV === 'test') return;
+  if (!env.CLERK_SECRET_KEY || !env.CLERK_PUBLISHABLE_KEY) {
+    throw new Error(
+      'CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY are required when NODE_ENV is not "test"'
+    );
+  }
+}
+
+export function parseAdminEmails(raw: string | undefined): Set<string> {
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)
+  );
 }
 
 export function getEnv(): Env {

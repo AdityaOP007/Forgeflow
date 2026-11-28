@@ -161,6 +161,42 @@ export interface UserProfile {
   createdAt: string;
 }
 
+export const updateUserRoleSchema = z.object({
+  role: UserRole,
+});
+export type UpdateUserRoleInput = z.infer<typeof updateUserRoleSchema>;
+
+export const updateServiceOwnerSchema = z.object({
+  ownerId: z.string().uuid(),
+});
+export type UpdateServiceOwnerInput = z.infer<typeof updateServiceOwnerSchema>;
+
+export interface ListUsersResponse {
+  data: UserProfile[];
+}
+
+export const listAuditLogsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  action: z.string().trim().min(1).max(100).optional(),
+  resourceType: z.string().trim().min(1).max(100).optional(),
+  actorId: z.string().uuid().optional(),
+  from: z.string().datetime({ offset: true }).optional(),
+  to: z.string().datetime({ offset: true }).optional(),
+});
+export type ListAuditLogsQuery = z.infer<typeof listAuditLogsQuerySchema>;
+
+export interface AuditLogItem {
+  id: string;
+  actorId: string;
+  actorName: string | null;
+  actorEmail: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  timestamp: string;
+}
+
 // ─── Template ────────────────────────────────────────────────────────
 export interface TemplateItem {
   id: string;

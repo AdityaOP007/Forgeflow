@@ -8,13 +8,15 @@ const envPath = path.join(repoRoot, 'apps/api/.env');
 dotenv.config({ path: envPath });
 console.log(`Loaded env from ${envPath}`);
 
-import { loadEnv } from './config/env.js';
+import { assertClerkConfigured, loadEnv } from './config/env.js';
 import { createApp } from './app.js';
-import { localUserAuthVerifier } from './middleware/auth.js';
+import { createClerkAuthVerifier } from './middleware/auth.js';
 
 const env = loadEnv();
+assertClerkConfigured(env);
+
 const app = createApp({
-  auth: localUserAuthVerifier,
+  auth: createClerkAuthVerifier(),
   webOrigin: env.WEB_ORIGIN,
 });
 

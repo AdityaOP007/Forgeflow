@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=22 <23",
+    "pnpm": ">=12 <13"
+  },
   "scripts": {
     "predev": "node scripts/predev.mjs",
     "dev": "pnpm db:migrate && pnpm db:seed && concurrently -n api,worker,web -c blue,magenta,green \"pnpm --filter @forgeflow/api dev\" \"pnpm --filter @forgeflow/api dev:worker\" \"pnpm --filter @forgeflow/web dev\"",

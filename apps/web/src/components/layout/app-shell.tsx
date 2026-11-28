@@ -11,13 +11,14 @@ import {
   Terminal,
   ChevronRight,
   GitBranch,
+  LogOut,
 } from 'lucide-react';
 import { useAppAuth } from '../../context/auth-context';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 
 export function AppShell() {
-  const { user, role } = useAppAuth();
+  const { user, role, signOut } = useAppAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -116,16 +117,14 @@ export function AppShell() {
           </nav>
         </div>
 
-        {/* Sidebar Footer with plain text local user info */}
-        <div className="p-4 border-t border-slate-800/80">
+        {/* Sidebar Footer with authenticated user menu, role, and sign-out */}
+        <div className="p-4 border-t border-slate-800/80 space-y-2.5">
           <div className="flex items-center justify-between">
             <div className="min-w-0">
               <span className="text-sm font-medium text-slate-200 block truncate">
-                {user?.name || 'Local Admin'}
+                {user?.name || user?.email || 'Signed in'}
               </span>
-              <span className="text-xs text-slate-500 block truncate">
-                {user?.email || 'admin@forgeflow.local'}
-              </span>
+              <span className="text-xs text-slate-500 block truncate">{user?.email || ''}</span>
             </div>
             <Badge
               variant="outline"
@@ -134,6 +133,20 @@ export function AppShell() {
               {role}
             </Badge>
           </div>
+          {role === 'viewer' && (
+            <p className="text-[11px] text-slate-400">
+              Read-only viewer role. Ask an admin to grant developer access.
+            </p>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => signOut()}
+            className="w-full justify-center space-x-1.5 text-xs text-slate-300"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span>Sign out</span>
+          </Button>
         </div>
       </aside>
 

@@ -14,7 +14,6 @@ export default defineConfig({
       NODE_ENV: 'test',
       PORT: '4000',
       WEB_ORIGIN: 'http://localhost:5173',
-      LOCAL_USER_EMAIL: 'admin@forgeflow.local',
     },
     globalSetup: ['./test/globalSetup.ts'],
     setupFiles: ['./test/setup.ts'],
