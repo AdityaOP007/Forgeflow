@@ -305,8 +305,9 @@ export type ListDeploymentsQuery = z.infer<typeof listDeploymentsQuerySchema>;
 
 export interface DeployServiceResponse {
   deploymentId: string;
-  workflowId: string;
-  status: 'queued';
+  workflowId: string | null;
+  status: 'queued' | 'succeeded';
+  noop?: boolean;
 }
 
 export interface UndeployServiceResponse {

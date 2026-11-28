@@ -80,6 +80,7 @@ export function ServiceDetailPage() {
   const [rollbackTarget, setRollbackTarget] = useState<DeploymentItem | null>(null);
   const [selectedCommitSha, setSelectedCommitSha] = useState('');
   const [deployActionError, setDeployActionError] = useState<string | null>(null);
+  const [deployNoopNotice, setDeployNoopNotice] = useState<string | null>(null);
 
   const {
     data: service,
@@ -180,7 +181,14 @@ export function ServiceDetailPage() {
       setIsDeployDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ['serviceDeployments', id] });
       queryClient.invalidateQueries({ queryKey: ['service', id] });
-      navigate(`/workflows/${res.workflowId}`);
+      if (res.noop) {
+        setDeployNoopNotice('No change: selected commit is already deployed and healthy.');
+        return;
+      }
+      setDeployNoopNotice(null);
+      if (res.workflowId) {
+        navigate(`/workflows/${res.workflowId}`);
+      }
     },
     onError: (err: Error & { status?: number }) => {
       if (err.status === 409) {
@@ -566,7 +574,11 @@ export function ServiceDetailPage() {
                   {isSafeApplicationUrl(devEnv?.url) ? (
                     <div className="flex flex-wrap items-center gap-3">
                       <a
-                        href={devEnv.url}
+                        href={
+                          isSafeApplicationUrl(`${devEnv.url}/docs`)
+                            ? `${devEnv.url}/docs`
+                            : devEnv.url
+                        }
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-indigo-400 hover:underline font-mono inline-flex items-center space-x-1"
@@ -574,17 +586,6 @@ export function ServiceDetailPage() {
                         <span>Open application</span>
                         <ExternalLink className="h-3 w-3" />
                       </a>
-                      {isSafeApplicationUrl(`${devEnv.url}/docs`) && (
-                        <a
-                          href={`${devEnv.url}/docs`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-slate-300 hover:text-indigo-300 hover:underline font-mono inline-flex items-center space-x-1"
-                        >
-                          <span>API docs</span>
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
-                      )}
                     </div>
                   ) : (
                     <span className="text-slate-500">—</span>
@@ -609,6 +610,12 @@ export function ServiceDetailPage() {
                   </span>
                 </div>
               </div>
+
+              {deployNoopNotice && (
+                <div className="p-2.5 rounded bg-emerald-950/30 border border-emerald-500/30 text-xs text-emerald-300">
+                  {deployNoopNotice}
+                </div>
+              )}
 
               {devEnv?.lastObservedError && (
                 <div className="p-2.5 rounded bg-rose-950/30 border border-rose-500/30 text-xs text-rose-300 font-mono break-all">
@@ -640,8 +647,13 @@ export function ServiceDetailPage() {
                   </TableHeader>
                   <TableBody>
                     {deployments.map((dep) => {
+                      const isRunningCommit = Boolean(
+                        devEnv?.deployedImage && devEnv?.deployedCommitSha === dep.commitSha
+                      );
                       const canRollback =
-                        canModify && (dep.status === 'succeeded' || dep.status === 'rolled_back');
+                        canModify &&
+                        !isRunningCommit &&
+                        (dep.status === 'succeeded' || dep.status === 'rolled_back');
                       return (
                         <TableRow key={dep.id}>
                           <TableCell className="font-mono text-xs text-slate-200">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import type { DeploymentItem, DeploymentStatus } from '@forgeflow/shared-types';
 import {
@@ -12,7 +12,12 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useAppAuth } from '../context/auth-context';
-import { fetchDeployments, fetchServices, rollbackDeployment } from '../lib/api-client';
+import {
+  fetchDeployments,
+  fetchServiceById,
+  fetchServices,
+  rollbackDeployment,
+} from '../lib/api-client';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -113,6 +118,23 @@ export function DeploymentsPage() {
   const serviceNameById = new Map<string, string>();
   for (const s of servicesData?.data ?? []) {
     serviceNameById.set(s.id, s.name);
+  }
+
+  const uniqueServiceIds = Array.from(new Set((data?.data ?? []).map((d) => d.serviceId)));
+  const serviceDetailQueries = useQueries({
+    queries: uniqueServiceIds.map((sid) => ({
+      queryKey: ['service', sid],
+      queryFn: () => fetchServiceById(sid),
+      staleTime: 5000,
+    })),
+  });
+
+  const runningCommitByServiceId = new Map<string, string>();
+  for (const q of serviceDetailQueries) {
+    const devEnv = q.data?.environments?.find((e) => e.name === 'development');
+    if (q.data?.id && devEnv?.deployedImage && devEnv?.deployedCommitSha) {
+      runningCommitByServiceId.set(q.data.id, devEnv.deployedCommitSha);
+    }
   }
 
   return (
@@ -219,8 +241,11 @@ export function DeploymentsPage() {
               </TableHeader>
               <TableBody>
                 {data.data.map((dep: DeploymentItem) => {
+                  const isRunningCommit =
+                    runningCommitByServiceId.get(dep.serviceId) === dep.commitSha;
                   const canRollback =
                     role !== 'viewer' &&
+                    !isRunningCommit &&
                     (dep.status === 'succeeded' || dep.status === 'rolled_back');
                   return (
                     <TableRow key={dep.id}>

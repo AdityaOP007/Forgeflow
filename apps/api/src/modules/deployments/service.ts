@@ -259,6 +259,34 @@ export async function triggerDeploy(
   const commitSha = await resolveDeployableCommit(svc, input.commitSha);
   const image = `ghcr.io/${parsedRepo.org.toLowerCase()}/${parsedRepo.repo.toLowerCase()}:${commitSha}`;
 
+  if (
+    env.status === 'healthy' &&
+    env.deployed_commit_sha === commitSha &&
+    env.deployed_image === image
+  ) {
+    const [existing] = await db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.environment_id, env.id),
+          eq(deployments.commit_sha, commitSha),
+          eq(deployments.status, 'succeeded')
+        )
+      )
+      .orderBy(desc(deployments.created_at))
+      .limit(1);
+
+    if (existing) {
+      return {
+        deploymentId: existing.id,
+        workflowId: existing.workflow_run_id,
+        status: 'succeeded',
+        noop: true,
+      };
+    }
+  }
+
   let dep: typeof deployments.$inferSelect;
   try {
     [dep] = await db
@@ -351,6 +379,14 @@ export async function triggerRollbackByDeploymentId(
       409,
       'INVALID_ROLLBACK_TARGET',
       `Only a succeeded or rolled_back deployment can be rolled back to (current status: '${target.status}')`
+    );
+  }
+
+  if (env.deployed_image && env.deployed_commit_sha === target.commit_sha) {
+    throw httpError(
+      409,
+      'ROLLBACK_TARGET_ALREADY_RUNNING',
+      `Commit ${target.commit_sha.slice(0, 7)} is already running in '${input.environment}'`
     );
   }
 

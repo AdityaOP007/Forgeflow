@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import request from 'supertest';
+import { createApp } from '../src/app.js';
 import { db } from '../src/db/client.js';
 import { services, workflowRuns, workflowSteps, workflowLogs } from '../src/db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
-import { testUsers } from './setup.js';
+import { testAuthVerifier, testUsers } from './setup.js';
 import {
   WORKFLOW_RUN_TRANSITIONS,
   WORKFLOW_STEP_TRANSITIONS,
@@ -1040,6 +1042,45 @@ MIIEowIBAAKCAQEA0Y1+abcdefghijklmnopqrstuvwxyz0123456789+/=
       expect(redactSecrets('postgresql+psycopg://postgres:mysecretpass@db:5432/app')).toBe(
         'postgresql+psycopg://postgres:[REDACTED]@db:5432/app'
       );
+    });
+  });
+
+  // ─── 4. GET /api/workflows type filter ──────────────────────────────
+  describe('GET /api/workflows type filter', () => {
+    it('filters by type=scaffold|deploy|undeploy and returns 400 for invalid type', async () => {
+      await enqueue({
+        serviceId: testServiceId,
+        type: 'scaffold',
+        steps: [{ key: 'step_1', name: 'Step 1' }],
+      });
+      await enqueue({
+        serviceId: testServiceId,
+        type: 'deploy',
+        steps: [{ key: 'preflight', name: 'Preflight' }],
+      });
+      await enqueue({
+        serviceId: testServiceId,
+        type: 'undeploy',
+        steps: [{ key: 'uninstall', name: 'Uninstall' }],
+      });
+
+      const app = createApp({ auth: testAuthVerifier });
+
+      for (const t of ['scaffold', 'deploy', 'undeploy'] as const) {
+        const res = await request(app)
+          .get(`/api/workflows?type=${t}`)
+          .set('Authorization', 'Bearer dev-owner-token');
+        expect(res.status).toBe(200);
+        expect(res.body.data.length).toBeGreaterThanOrEqual(1);
+        for (const item of res.body.data) {
+          expect(item.type).toBe(t);
+        }
+      }
+
+      const badRes = await request(app)
+        .get('/api/workflows?type=invalid_type')
+        .set('Authorization', 'Bearer dev-owner-token');
+      expect(badRes.status).toBe(400);
     });
   });
 });

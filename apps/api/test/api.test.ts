@@ -673,6 +673,58 @@ describe('ForgeFlow API — Checkpoint 1C Comprehensive Test Suite', () => {
       });
       expect(JSON.stringify(res.body)).not.toMatch(/BEGIN.*PRIVATE KEY|ghs_|ghp_|github_pat_/);
     });
+
+    it('counts deployed environments and healthy services independently of running workflows', async () => {
+      await cleanTables();
+      const [dev] = await db
+        .insert(users)
+        .values({
+          clerk_id: 'dev_summary_env_test',
+          email: 'devenv@test.local',
+          name: 'Dev Env',
+          role: 'developer',
+        })
+        .returning();
+
+      const [svc1] = await db
+        .insert(services)
+        .values({ name: 'svc-dep-1', slug: 'svc-dep-1', owner_id: dev.id })
+        .returning();
+      const [svc2] = await db
+        .insert(services)
+        .values({ name: 'svc-dep-2', slug: 'svc-dep-2', owner_id: dev.id })
+        .returning();
+      const [svc3] = await db
+        .insert(services)
+        .values({ name: 'svc-undeployed', slug: 'svc-undeployed', owner_id: dev.id })
+        .returning();
+
+      await db.insert(environments).values([
+        {
+          service_id: svc1.id,
+          name: 'development',
+          status: 'healthy',
+          deployed_image: 'ghcr.io/forgeflow/svc-dep-1:' + 'a'.repeat(40),
+        },
+        {
+          service_id: svc2.id,
+          name: 'development',
+          status: 'degraded',
+          deployed_image: 'ghcr.io/forgeflow/svc-dep-2:' + 'b'.repeat(40),
+        },
+        { service_id: svc3.id, name: 'development', status: 'unknown', deployed_image: null },
+      ]);
+
+      const res = await request(app)
+        .get('/api/dashboard/summary')
+        .set('Authorization', 'Bearer dev-owner-token');
+      expect(res.status).toBe(200);
+      expect(res.body.totalServices).toBe(3);
+      expect(res.body.healthyCount).toBe(1);
+      expect(res.body.unhealthyCount).toBe(1);
+      expect(res.body.unknownCount).toBe(1);
+      expect(res.body.activeDeployments).toBe(2);
+    });
   });
 
   // ─── 9. Audit Logging ───────────────────────────────────────────────

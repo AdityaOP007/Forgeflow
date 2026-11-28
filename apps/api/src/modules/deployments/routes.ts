@@ -68,7 +68,7 @@ export function createServiceDeploymentsRouter(): Router {
           req.auth!.userId!,
           req.auth!.role!
         );
-        res.status(202).json(result);
+        res.status(result.noop ? 200 : 202).json(result);
       } catch (err) {
         handleKnownHttpError(err, res, next);
       }

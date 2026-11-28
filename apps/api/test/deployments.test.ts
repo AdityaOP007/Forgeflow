@@ -384,6 +384,14 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
     expect(Object.keys(dep1Res.body).sort()).toEqual(['deploymentId', 'status', 'workflowId']);
     expect(await worker.pollOnce()).toBe(true);
 
+    // deploy sha2 so sha1 is no longer the running commit, then rollback to dep1 -> 202
+    const dep2Res = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha2 });
+    expect(dep2Res.status).toBe(202);
+    expect(await worker.pollOnce()).toBe(true);
+
     // rollback 202
     const rbRes = await request(app)
       .post(`/api/deployments/${dep1Res.body.deploymentId}/rollback`)
@@ -808,7 +816,14 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
     expect(rowRb.status).toBe('succeeded');
     expect(rowRb.rollback_of).toBe(dep1.body.deploymentId);
 
-    // Target dep1 can be rolled back to again
+    // Deploy sha2 again, then confirm target dep1 can still be rolled back to
+    const dep3 = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha2 });
+    expect(dep3.status).toBe(202);
+    expect(await worker.pollOnce()).toBe(true);
+
     const rbAgain = await request(app)
       .post(`/api/deployments/${dep1.body.deploymentId}/rollback`)
       .set('Authorization', 'Bearer dev-owner-token')
@@ -1124,5 +1139,67 @@ describe('Deploy, Rollback, Undeploy & Cluster Reconciliation — Checkpoint 3D'
     expect(dep.error_summary).toContain('GHCR_PULL_USERNAME');
     expect(dep.error_summary).toContain('GHCR_PULL_TOKEN');
     assertNoSecrets(dep.error_summary ?? '');
+  });
+
+  it('returns 409 ROLLBACK_TARGET_ALREADY_RUNNING when rolling back to the currently running commit', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const worker = createWorker({
+      workerId: 'worker-rb-same',
+      stepResolver: makeStepResolver(runner, gh),
+    });
+
+    const depRes = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(depRes.status).toBe(202);
+    expect(await worker.pollOnce()).toBe(true);
+
+    const rbRes = await request(app)
+      .post(`/api/deployments/${depRes.body.deploymentId}/rollback`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development' });
+    expect(rbRes.status).toBe(409);
+    expect(rbRes.body.error.code).toBe('ROLLBACK_TARGET_ALREADY_RUNNING');
+  });
+
+  it('returns 200 noop: true without creating a new deployment or workflow when commit is already running and healthy', async () => {
+    const sha1 = 'a'.repeat(40);
+    const { svc } = await seedReadyServiceWithCi(sha1);
+    const app = createApp({ auth: testAuthVerifier });
+    const runner = new FakeK8sRunner();
+    const gh = makeFakeGitHub(sha1);
+    const worker = createWorker({
+      workerId: 'worker-noop-deploy',
+      stepResolver: makeStepResolver(runner, gh),
+    });
+
+    const first = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(first.status).toBe(202);
+    expect(await worker.pollOnce()).toBe(true);
+
+    const second = await request(app)
+      .post(`/api/services/${svc.id}/deployments`)
+      .set('Authorization', 'Bearer dev-owner-token')
+      .send({ environment: 'development', commitSha: sha1 });
+    expect(second.status).toBe(200);
+    expect(second.body).toEqual({
+      deploymentId: first.body.deploymentId,
+      workflowId: first.body.workflowId,
+      status: 'succeeded',
+      noop: true,
+    });
+
+    const depRows = await db.select().from(deployments).where(eq(deployments.service_id, svc.id));
+    expect(depRows).toHaveLength(1);
+    const wfRows = await db.select().from(workflowRuns).where(eq(workflowRuns.service_id, svc.id));
+    expect(wfRows).toHaveLength(1);
   });
 });
